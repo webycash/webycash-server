@@ -175,10 +175,7 @@ impl LedgerStore for RedisFdbStore {
         Ok(())
     }
 
-    async fn check_tokens(
-        &self,
-        hashes: &[String],
-    ) -> anyhow::Result<Vec<(String, Option<bool>)>> {
+    async fn check_tokens(&self, hashes: &[String]) -> anyhow::Result<Vec<(String, Option<bool>)>> {
         // Try Redis first for the batch
         match self.redis.check_tokens(hashes).await {
             Ok(results) => {

@@ -6,8 +6,8 @@ use hyper::body::Incoming;
 use hyper::{Request, Response};
 use serde::Deserialize;
 
-use super::AppState;
 use super::router::{bad_request, ok_json};
+use super::AppState;
 
 #[derive(Deserialize)]
 struct BurnRequest {
@@ -24,7 +24,10 @@ pub async fn handle(
     state: Arc<AppState>,
     req: Request<Incoming>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    let body_bytes = req.collect().await.map_err(|_| ())
+    let body_bytes = req
+        .collect()
+        .await
+        .map_err(|_| ())
         .unwrap_or_default()
         .to_bytes();
 
@@ -41,12 +44,7 @@ pub async fn handle(
         return bad_request("destroy_webcash must not be empty");
     }
 
-    match state
-        .server
-        .ledger()
-        .burn(request.destroy_webcash)
-        .await
-    {
+    match state.server.ledger().burn(request.destroy_webcash).await {
         Ok(()) => ok_json(r#"{"status":"success"}"#.to_string()),
         Err(e) => bad_request(&e.to_string()),
     }

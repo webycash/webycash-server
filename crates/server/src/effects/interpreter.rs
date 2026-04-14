@@ -1,5 +1,5 @@
-use crate::db::LedgerStore;
 use super::LedgerEffect;
+use crate::db::LedgerStore;
 
 /// Interpret a LedgerEffect program against a real database backend.
 /// Uses iterative trampolining to avoid stack overflow on deep chains.

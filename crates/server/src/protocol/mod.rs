@@ -1,7 +1,7 @@
 pub mod amount;
-pub mod token;
 pub mod mining;
+pub mod token;
 
 pub use amount::Amount;
-pub use token::{SecretWebcash, PublicWebcash};
-pub use mining::{verify_pow, leading_zero_bits};
+pub use mining::{leading_zero_bits, verify_pow};
+pub use token::{PublicWebcash, SecretWebcash};

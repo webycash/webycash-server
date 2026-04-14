@@ -1,9 +1,9 @@
-pub mod config;
-pub mod protocol;
-pub mod db;
 pub mod actors;
 pub mod api;
+pub mod config;
+pub mod db;
 pub mod effects;
+pub mod protocol;
 
 use std::sync::Arc;
 
@@ -20,7 +20,11 @@ pub struct WebcashServer<S: LedgerStore> {
 }
 
 impl<S: LedgerStore> WebcashServer<S> {
-    pub fn new(store: S, server_config: config::ServerConfig, mining_config: config::MiningConfig) -> Self {
+    pub fn new(
+        store: S,
+        server_config: config::ServerConfig,
+        mining_config: config::MiningConfig,
+    ) -> Self {
         Self {
             server_config,
             mining_config,
@@ -31,12 +35,9 @@ impl<S: LedgerStore> WebcashServer<S> {
 
     /// Start supervised actor hierarchy. Must be called before handling requests.
     pub async fn start(&mut self) -> anyhow::Result<()> {
-        let supervisor = actors::start_actors(
-            self.store.clone(),
-            &self.server_config,
-            &self.mining_config,
-        )
-        .await?;
+        let supervisor =
+            actors::start_actors(self.store.clone(), &self.server_config, &self.mining_config)
+                .await?;
         self.supervisor = Some(supervisor);
         Ok(())
     }

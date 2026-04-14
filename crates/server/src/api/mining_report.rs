@@ -6,8 +6,8 @@ use hyper::body::Incoming;
 use hyper::{Request, Response, StatusCode};
 use serde::Deserialize;
 
-use super::AppState;
 use super::router::{bad_request, ok_json};
+use super::AppState;
 
 #[derive(Deserialize)]
 struct MiningReportRequest {

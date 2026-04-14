@@ -12,10 +12,10 @@ use hyper::Request;
 use hyper_util::rt::TokioIo;
 use tracing_subscriber::EnvFilter;
 
-use webycash_server::config::Config;
-use webycash_server::WebcashServer;
 use webycash_server::api;
+use webycash_server::config::Config;
 use webycash_server::db;
+use webycash_server::WebcashServer;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -69,11 +69,10 @@ async fn main() -> anyhow::Result<()> {
                 let state = state.clone();
                 async move { api::router::route(state, req).await }
             });
-            if let Err(e) = hyper_util::server::conn::auto::Builder::new(
-                hyper_util::rt::TokioExecutor::new(),
-            )
-            .serve_connection(TokioIo::new(stream), service)
-            .await
+            if let Err(e) =
+                hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
+                    .serve_connection(TokioIo::new(stream), service)
+                    .await
             {
                 tracing::error!(%peer, error = %e, "connection error");
             }

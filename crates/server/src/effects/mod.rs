@@ -49,9 +49,7 @@ pub enum LedgerEffect<A: Send + 'static> {
         next: Box<dyn FnOnce(()) -> LedgerEffect<A> + Send>,
     },
     /// Fail with an error message. Short-circuits the effect chain.
-    Fail {
-        error: String,
-    },
+    Fail { error: String },
 }
 
 impl<A: Send + 'static> LedgerEffect<A> {
@@ -86,12 +84,10 @@ impl<A: Send + 'static> LedgerEffect<A> {
             LedgerEffect::GetMiningState { next } => LedgerEffect::GetMiningState {
                 next: Box::new(move |s| next(s).bind(f)),
             },
-            LedgerEffect::UpdateMiningState { state, next } => {
-                LedgerEffect::UpdateMiningState {
-                    state,
-                    next: Box::new(move |()| next(()).bind(f)),
-                }
-            }
+            LedgerEffect::UpdateMiningState { state, next } => LedgerEffect::UpdateMiningState {
+                state,
+                next: Box::new(move |()| next(()).bind(f)),
+            },
             LedgerEffect::AtomicReplace {
                 inputs,
                 outputs,

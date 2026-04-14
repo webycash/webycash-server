@@ -15,7 +15,9 @@ pub struct LedgerHandle {
 pub enum LedgerMsg {
     HealthCheck {
         hashes: Vec<String>,
-        reply: tokio::sync::oneshot::Sender<anyhow::Result<Vec<(String, Option<bool>, Option<String>)>>>,
+        reply: tokio::sync::oneshot::Sender<
+            anyhow::Result<Vec<(String, Option<bool>, Option<String>)>>,
+        >,
     },
     Replace {
         webcashes: Vec<String>,
@@ -44,13 +46,9 @@ impl LedgerActor {
     }
 
     pub async fn start(store: Arc<dyn LedgerStore>) -> anyhow::Result<LedgerHandle> {
-        let (actor_ref, _) = Actor::spawn(
-            Some("ledger".to_string()),
-            Self::new(store),
-            (),
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to start ledger actor: {}", e))?;
+        let (actor_ref, _) = Actor::spawn(Some("ledger".to_string()), Self::new(store), ())
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to start ledger actor: {}", e))?;
         Ok(LedgerHandle { actor: actor_ref })
     }
 }

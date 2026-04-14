@@ -6,8 +6,8 @@ use hyper::body::Incoming;
 use hyper::{Request, Response};
 use serde::Deserialize;
 
-use super::AppState;
 use super::router::{bad_request, ok_json};
+use super::AppState;
 
 #[derive(Deserialize)]
 struct ReplaceRequest {
@@ -25,7 +25,10 @@ pub async fn handle(
     state: Arc<AppState>,
     req: Request<Incoming>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    let body_bytes = req.collect().await.map_err(|_| ())
+    let body_bytes = req
+        .collect()
+        .await
+        .map_err(|_| ())
         .unwrap_or_default()
         .to_bytes();
 

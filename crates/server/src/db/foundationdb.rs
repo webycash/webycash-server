@@ -72,9 +72,8 @@ async fn trx_get_json<T: serde::de::DeserializeOwned>(
     match slice {
         None => Ok(None),
         Some(bytes) => {
-            let val: T = serde_json::from_slice(bytes.as_ref()).map_err(|e| {
-                FdbBindingError::CustomError(Box::new(e))
-            })?;
+            let val: T = serde_json::from_slice(bytes.as_ref())
+                .map_err(|e| FdbBindingError::CustomError(Box::new(e)))?;
             Ok(Some(val))
         }
     }
@@ -86,9 +85,7 @@ fn trx_set_json<T: serde::Serialize>(
     key: &[u8],
     value: &T,
 ) -> Result<(), FdbBindingError> {
-    let json = serde_json::to_vec(value).map_err(|e| {
-        FdbBindingError::CustomError(Box::new(e))
-    })?;
+    let json = serde_json::to_vec(value).map_err(|e| FdbBindingError::CustomError(Box::new(e)))?;
     trx.set(key, &json);
     Ok(())
 }
@@ -303,10 +300,7 @@ impl LedgerStore for FdbStore {
             .map_err(fdb_err)
     }
 
-    async fn check_tokens(
-        &self,
-        hashes: &[String],
-    ) -> anyhow::Result<Vec<(String, Option<bool>)>> {
+    async fn check_tokens(&self, hashes: &[String]) -> anyhow::Result<Vec<(String, Option<bool>)>> {
         let keys: Vec<(String, Vec<u8>)> = hashes
             .iter()
             .map(|h| (h.clone(), self.token_key(h)))

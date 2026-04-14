@@ -1,7 +1,7 @@
-pub mod redis;
 pub mod dynamodb;
 #[cfg(feature = "fdb")]
 pub mod foundationdb;
+pub mod redis;
 #[cfg(feature = "fdb")]
 pub mod redis_fdb;
 
@@ -157,8 +157,16 @@ pub async fn create_store(config: &Config) -> anyhow::Result<Box<dyn LedgerStore
         DbBackend::FoundationDb => {
             #[cfg(feature = "fdb")]
             {
+                // Safety: must be called exactly once before any FDB API usage.
+                // The foundationdb crate requires network boot before Database::new().
+                // Leak the guard so the network stays alive for the process lifetime.
+                tracing::info!("booting FDB network...");
+                let network = unsafe { ::foundationdb::boot() };
+                std::mem::forget(network);
+                tracing::info!("FDB network booted, creating store...");
                 let cluster_file = config.server.db.fdb_cluster_file.as_deref();
                 let store = foundationdb::FdbStore::new(cluster_file)?;
+                tracing::info!("FDB store created");
                 Ok(Box::new(store))
             }
             #[cfg(not(feature = "fdb"))]
@@ -172,6 +180,9 @@ pub async fn create_store(config: &Config) -> anyhow::Result<Box<dyn LedgerStore
         DbBackend::RedisFdb => {
             #[cfg(feature = "fdb")]
             {
+                // Safety: must be called exactly once before any FDB API usage.
+                let network = unsafe { ::foundationdb::boot() };
+                std::mem::forget(network);
                 let redis_url = config
                     .server
                     .db

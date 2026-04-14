@@ -28,13 +28,9 @@ impl StatsActor {
     }
 
     pub async fn start(store: Arc<dyn LedgerStore>) -> anyhow::Result<StatsHandle> {
-        let (actor_ref, _) = Actor::spawn(
-            Some("stats".to_string()),
-            Self::new(store),
-            (),
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to start stats actor: {}", e))?;
+        let (actor_ref, _) = Actor::spawn(Some("stats".to_string()), Self::new(store), ())
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to start stats actor: {}", e))?;
         Ok(StatsHandle { actor: actor_ref })
     }
 }

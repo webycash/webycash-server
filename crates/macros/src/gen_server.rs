@@ -54,10 +54,7 @@ pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
 
     for handler in &handlers {
         let method_name = &handler.sig.ident;
-        let variant_name = format_ident!(
-            "{}",
-            to_pascal_case(&method_name.to_string())
-        );
+        let variant_name = format_ident!("{}", to_pascal_case(&method_name.to_string()));
 
         // Extract parameter names and types (skip &self)
         let params: Vec<_> = handler

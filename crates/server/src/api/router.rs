@@ -6,8 +6,8 @@ use http_body_util::Full;
 use hyper::body::Incoming;
 use hyper::{Request, Response, StatusCode};
 
-use super::AppState;
 use super::service::{HandlerService, Logged, Service, Timed};
+use super::AppState;
 
 type BoxBody = Full<Bytes>;
 
@@ -67,9 +67,7 @@ pub async fn route(
         (Method::GET, "/api/v1/target") => {
             dispatch(state, req, super::target::handle, "target").await
         }
-        (Method::GET, "/api/v1/stats") => {
-            dispatch(state, req, super::stats::handle, "stats").await
-        }
+        (Method::GET, "/api/v1/stats") => dispatch(state, req, super::stats::handle, "stats").await,
         (Method::GET, "/terms") | (Method::GET, "/terms/text") => {
             dispatch(state, req, super::terms::handle, "terms").await
         }
@@ -81,7 +79,13 @@ pub async fn route(
             dispatch(state, req, super::mining_report::handle, "mining_report").await
         }
         (Method::POST, "/api/v1/mining_report/stream") => {
-            dispatch(state, req, super::mining_report::handle_stream, "mining_report_stream").await
+            dispatch(
+                state,
+                req,
+                super::mining_report::handle_stream,
+                "mining_report_stream",
+            )
+            .await
         }
         (Method::POST, "/api/v1/replace") => {
             dispatch(state, req, super::replace::handle, "replace").await
@@ -89,9 +93,7 @@ pub async fn route(
         (Method::POST, "/api/v1/health_check") => {
             dispatch(state, req, super::health_check::handle, "health_check").await
         }
-        (Method::POST, "/api/v1/burn") => {
-            dispatch(state, req, super::burn::handle, "burn").await
-        }
+        (Method::POST, "/api/v1/burn") => dispatch(state, req, super::burn::handle, "burn").await,
 
         _ => not_found(),
     }

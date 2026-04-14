@@ -5,8 +5,8 @@ use http_body_util::Full;
 use hyper::body::Incoming;
 use hyper::{Request, Response};
 
-use super::AppState;
 use super::router::{internal_error, ok_json};
+use super::AppState;
 
 pub async fn handle(
     state: Arc<AppState>,

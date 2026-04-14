@@ -142,4 +142,3 @@ where
         (self.handler)(self.state.clone(), req).await
     }
 }
-

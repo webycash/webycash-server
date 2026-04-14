@@ -252,10 +252,7 @@ impl LedgerStore for RedisStore {
         Ok(())
     }
 
-    async fn check_tokens(
-        &self,
-        hashes: &[String],
-    ) -> anyhow::Result<Vec<(String, Option<bool>)>> {
+    async fn check_tokens(&self, hashes: &[String]) -> anyhow::Result<Vec<(String, Option<bool>)>> {
         let mut conn = self.pool.clone();
         let mut results = Vec::with_capacity(hashes.len());
         for hash in hashes {

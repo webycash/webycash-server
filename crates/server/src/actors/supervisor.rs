@@ -92,13 +92,9 @@ impl SupervisorActor {
             mining_config: mining_config.clone(),
         };
 
-        let (actor_ref, _) = Actor::spawn(
-            Some("supervisor".to_string()),
-            Self,
-            args,
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to start supervisor: {e}"))?;
+        let (actor_ref, _) = Actor::spawn(Some("supervisor".to_string()), Self, args)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to start supervisor: {e}"))?;
 
         // Subscribe to handle updates from the supervisor.
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -280,7 +276,10 @@ impl SupervisorActor {
                 tracing::info!("stats actor restarted");
             }
             other => {
-                tracing::warn!(name = other, "unknown child actor terminated, not restarting");
+                tracing::warn!(
+                    name = other,
+                    "unknown child actor terminated, not restarting"
+                );
                 return Ok(());
             }
         }

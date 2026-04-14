@@ -6,9 +6,9 @@
 
 use std::str::FromStr;
 
+use super::{atomic_replace, get_token, LedgerEffect};
 use crate::db::{ReplacementRecord, TokenOrigin, TokenRecord};
 use crate::protocol::{Amount, SecretWebcash};
-use super::{atomic_replace, get_token, LedgerEffect};
 
 /// Build a replace effect program from input and output webcash strings.
 /// Returns a LedgerEffect that, when interpreted, validates all inputs
@@ -75,7 +75,10 @@ pub fn build_replace_effect(
     }
 
     // Build validation chain: verify each input exists and is unspent
-    let output_hashes: Vec<String> = output_records.iter().map(|r| r.public_hash.clone()).collect();
+    let output_hashes: Vec<String> = output_records
+        .iter()
+        .map(|r| r.public_hash.clone())
+        .collect();
     let record = ReplacementRecord {
         id: uuid::Uuid::new_v4().to_string(),
         input_hashes: input_hashes.clone(),
@@ -85,7 +88,13 @@ pub fn build_replace_effect(
     };
 
     // Chain: validate each input via GetToken, then AtomicReplace
-    build_validation_chain(input_hashes.clone(), 0, input_hashes, output_records, record)
+    build_validation_chain(
+        input_hashes.clone(),
+        0,
+        input_hashes,
+        output_records,
+        record,
+    )
 }
 
 /// Recursively build a chain of GetToken effects to validate each input,

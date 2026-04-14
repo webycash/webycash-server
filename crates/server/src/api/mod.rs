@@ -1,11 +1,11 @@
-pub mod router;
-pub mod service;
-pub mod target;
+pub mod burn;
+pub mod health_check;
 pub mod mining_report;
 pub mod replace;
-pub mod health_check;
-pub mod burn;
+pub mod router;
+pub mod service;
 pub mod stats;
+pub mod target;
 pub mod terms;
 
 use crate::config::Config;

@@ -2,9 +2,7 @@ use async_trait::async_trait;
 use aws_sdk_dynamodb::types::AttributeValue;
 use aws_sdk_dynamodb::Client;
 
-use super::{
-    BurnRecord, EconomyStats, LedgerStore, ReplacementRecord, TokenRecord,
-};
+use super::{BurnRecord, EconomyStats, LedgerStore, ReplacementRecord, TokenRecord};
 use crate::config::DbConfig;
 use crate::protocol::mining::MiningState;
 
@@ -50,8 +48,7 @@ impl DynamoDbStore {
 
     pub async fn ensure_tables(&self) -> anyhow::Result<()> {
         use aws_sdk_dynamodb::types::{
-            AttributeDefinition, KeySchemaElement, KeyType, ScalarAttributeType,
-            BillingMode,
+            AttributeDefinition, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType,
         };
 
         let tables = vec![
@@ -71,10 +68,7 @@ impl DynamoDbStore {
                     ("log_id", ScalarAttributeType::S),
                     ("created_at", ScalarAttributeType::S),
                 ],
-                vec![
-                    ("log_id", KeyType::Hash),
-                    ("created_at", KeyType::Range),
-                ],
+                vec![("log_id", KeyType::Hash), ("created_at", KeyType::Range)],
             ),
         ];
 
@@ -251,10 +245,7 @@ impl LedgerStore for DynamoDbStore {
                     .put(
                         Put::builder()
                             .table_name(self.tokens_table())
-                            .item(
-                                "public_hash",
-                                AttributeValue::S(output.public_hash.clone()),
-                            )
+                            .item("public_hash", AttributeValue::S(output.public_hash.clone()))
                             .item("data", AttributeValue::S(json))
                             .condition_expression("attribute_not_exists(public_hash)")
                             .build()?,
@@ -384,10 +375,7 @@ impl LedgerStore for DynamoDbStore {
         Ok(())
     }
 
-    async fn check_tokens(
-        &self,
-        hashes: &[String],
-    ) -> anyhow::Result<Vec<(String, Option<bool>)>> {
+    async fn check_tokens(&self, hashes: &[String]) -> anyhow::Result<Vec<(String, Option<bool>)>> {
         let mut results = Vec::with_capacity(hashes.len());
         for hash in hashes {
             let token = self.get_token(hash).await?;

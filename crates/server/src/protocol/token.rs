@@ -92,8 +92,9 @@ fn parse_secret_webcash(input: &str) -> IResult<&str, SecretWebcash> {
         separated_pair(amount_parser, tag(":secret:"), hex64),
     )(input)?;
 
-    let amount =
-        Amount::from_str(amt_str).map_err(|_| nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Verify)))?;
+    let amount = Amount::from_str(amt_str).map_err(|_| {
+        nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Verify))
+    })?;
 
     Ok((
         rest,
@@ -110,8 +111,9 @@ fn parse_public_webcash(input: &str) -> IResult<&str, PublicWebcash> {
         separated_pair(amount_parser, tag(":public:"), hex64),
     )(input)?;
 
-    let amount =
-        Amount::from_str(amt_str).map_err(|_| nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Verify)))?;
+    let amount = Amount::from_str(amt_str).map_err(|_| {
+        nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Verify))
+    })?;
 
     Ok((
         rest,
@@ -136,7 +138,8 @@ pub fn parse_public(input: &str) -> IResult<&str, PublicWebcash> {
 mod tests {
     use super::*;
 
-    const TEST_SECRET: &str = "e200.00000000:secret:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+    const TEST_SECRET: &str =
+        "e200.00000000:secret:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
 
     #[test]
     fn parse_secret_token() {
@@ -165,7 +168,8 @@ mod tests {
 
     #[test]
     fn parse_public_token() {
-        let s = "e1.00000000:public:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+        let s =
+            "e1.00000000:public:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
         let wc = PublicWebcash::from_str(s).unwrap();
         assert_eq!(wc.amount.to_string(), "1.00000000");
         assert_eq!(wc.hash.len(), 64);

@@ -34,11 +34,15 @@ impl Amount {
     }
 
     pub fn checked_add(self, other: Amount) -> Option<Amount> {
-        self.wats.checked_add(other.wats).map(|w| Amount { wats: w })
+        self.wats
+            .checked_add(other.wats)
+            .map(|w| Amount { wats: w })
     }
 
     pub fn checked_sub(self, other: Amount) -> Option<Amount> {
-        self.wats.checked_sub(other.wats).map(|w| Amount { wats: w })
+        self.wats
+            .checked_sub(other.wats)
+            .map(|w| Amount { wats: w })
     }
 }
 
@@ -88,7 +92,8 @@ impl std::ops::Add for Amount {
 impl std::ops::Sub for Amount {
     type Output = Amount;
     fn sub(self, rhs: Amount) -> Amount {
-        self.checked_sub(rhs).expect("amount underflow in subtraction")
+        self.checked_sub(rhs)
+            .expect("amount underflow in subtraction")
     }
 }
 
@@ -120,9 +125,7 @@ fn parse_amount_str(input: &str) -> Result<Amount, AmountError> {
             let whole: i64 = parts[0]
                 .parse()
                 .map_err(|_| AmountError::InvalidFormat(input.to_string()))?;
-            let wats = whole
-                .checked_mul(SCALE)
-                .ok_or(AmountError::Overflow)?;
+            let wats = whole.checked_mul(SCALE).ok_or(AmountError::Overflow)?;
             Ok(Amount {
                 wats: if negative { -wats } else { wats },
             })
