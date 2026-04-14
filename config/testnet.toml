@@ -1,0 +1,18 @@
+[server]
+mode = "testnet"
+bind_addr = "0.0.0.0:8080"
+
+[server.db]
+backend = "redis"
+# redis_url = "redis://127.0.0.1:6379"
+# dynamodb_endpoint = "http://localhost:8000"
+# fdb_cluster_file = "/etc/foundationdb/fdb.cluster"
+
+[mining]
+# Testnet: constant low difficulty, CPU mines in seconds
+testnet_difficulty = 16
+initial_difficulty = 16
+reports_per_epoch = 100
+target_epoch_seconds = 1000
+initial_mining_amount_wats = 20000000000
+initial_subsidy_amount_wats = 0

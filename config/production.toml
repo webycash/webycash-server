@@ -1,0 +1,17 @@
+[server]
+mode = "production"
+bind_addr = "0.0.0.0:8080"
+
+[server.db]
+backend = "redis_fdb"
+# redis_url = "redis://127.0.0.1:6379"
+# fdb_cluster_file = "/etc/foundationdb/fdb.cluster"
+
+[mining]
+# Production: dynamic difficulty adjustment
+testnet_difficulty = 20
+initial_difficulty = 20
+reports_per_epoch = 1000
+target_epoch_seconds = 10000
+initial_mining_amount_wats = 20000000000
+initial_subsidy_amount_wats = 0
