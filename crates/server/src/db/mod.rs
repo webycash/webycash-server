@@ -160,13 +160,10 @@ pub async fn create_store(config: &Config) -> anyhow::Result<Box<dyn LedgerStore
                 // Safety: must be called exactly once before any FDB API usage.
                 // The foundationdb crate requires network boot before Database::new().
                 // Leak the guard so the network stays alive for the process lifetime.
-                tracing::info!("booting FDB network...");
                 let network = unsafe { ::foundationdb::boot() };
                 std::mem::forget(network);
-                tracing::info!("FDB network booted, creating store...");
                 let cluster_file = config.server.db.fdb_cluster_file.as_deref();
                 let store = foundationdb::FdbStore::new(cluster_file)?;
-                tracing::info!("FDB store created");
                 Ok(Box::new(store))
             }
             #[cfg(not(feature = "fdb"))]

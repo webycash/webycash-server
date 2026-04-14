@@ -11,6 +11,8 @@ services:
     image: foundationdb/foundationdb:7.3.43
     ports:
       - "4500:4500"
+    environment:
+      FDB_NETWORKING_MODE: host
     volumes:
       - fdb-data:/var/fdb/data
 
