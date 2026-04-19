@@ -5,9 +5,7 @@ use ractor::{Actor, ActorProcessingErr, ActorRef};
 
 use crate::config::{MiningConfig, NetworkMode, ServerConfig};
 use crate::db::{LedgerStore, TokenOrigin, TokenRecord};
-use crate::protocol::mining::{
-    adjust_difficulty, verify_and_parse, MiningState, TargetInfo,
-};
+use crate::protocol::mining::{adjust_difficulty, verify_and_parse, MiningState, TargetInfo};
 use crate::protocol::{Amount, SecretWebcash};
 
 /// Handle to communicate with the MinerActor.
