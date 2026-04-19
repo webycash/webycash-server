@@ -1,3 +1,4 @@
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -32,12 +33,47 @@ pub fn verify_pow(preimage: &str, difficulty_bits: u32) -> bool {
 ///   "difficulty": target_bits
 /// }
 /// ```
+///
+/// Accepts extra fields (legalese, nonce) — serde ignores them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MiningPreimage {
     pub webcash: Vec<String>,
     pub subsidy: Vec<String>,
     pub timestamp: u64,
     pub difficulty: u32,
+}
+
+/// Verify PoW and parse preimage. Accepts both raw JSON and base64-encoded
+/// preimages (as produced by the C++ webminer / GPU WorkUnit).
+///
+/// For raw JSON: SHA256(preimage_str) checked directly.
+/// For base64: SHA256(preimage_str) checked on the base64 bytes (matching the
+/// miner's computation), then base64-decoded to get the JSON for validation.
+pub fn verify_and_parse(
+    preimage_str: &str,
+    difficulty_bits: u32,
+) -> anyhow::Result<MiningPreimage> {
+    // 1. PoW: SHA256 of the submitted preimage bytes (raw JSON or base64)
+    if !verify_pow(preimage_str, difficulty_bits) {
+        anyhow::bail!(
+            "proof-of-work does not meet difficulty target of {} bits",
+            difficulty_bits
+        );
+    }
+
+    // 2. Parse: try raw JSON first, then base64-decoded JSON
+    if let Ok(preimage) = serde_json::from_str::<MiningPreimage>(preimage_str) {
+        return Ok(preimage);
+    }
+
+    // Not valid JSON — try base64 decode
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(preimage_str.as_bytes())
+        .map_err(|e| anyhow::anyhow!("preimage is neither valid JSON nor valid base64: {}", e))?;
+    let json_str = String::from_utf8(decoded)
+        .map_err(|e| anyhow::anyhow!("base64-decoded preimage is not valid UTF-8: {}", e))?;
+    serde_json::from_str::<MiningPreimage>(&json_str)
+        .map_err(|e| anyhow::anyhow!("base64-decoded preimage is not valid JSON: {}", e))
 }
 
 /// Result of mining target query.

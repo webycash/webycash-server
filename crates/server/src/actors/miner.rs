@@ -6,7 +6,7 @@ use ractor::{Actor, ActorProcessingErr, ActorRef};
 use crate::config::{MiningConfig, NetworkMode, ServerConfig};
 use crate::db::{LedgerStore, TokenOrigin, TokenRecord};
 use crate::protocol::mining::{
-    adjust_difficulty, verify_pow, MiningPreimage, MiningState, TargetInfo,
+    adjust_difficulty, verify_and_parse, MiningState, TargetInfo,
 };
 use crate::protocol::{Amount, SecretWebcash};
 
@@ -146,17 +146,8 @@ impl MinerActor {
     ) -> anyhow::Result<MiningReportResult> {
         let difficulty = state.mining_state.difficulty_target_bits;
 
-        // 1. Verify proof-of-work: SHA256(preimage) must have >= difficulty leading zero bits
-        if !verify_pow(preimage_str, difficulty) {
-            anyhow::bail!(
-                "proof-of-work does not meet difficulty target of {} bits",
-                difficulty
-            );
-        }
-
-        // 2. Parse preimage JSON
-        let preimage: MiningPreimage = serde_json::from_str(preimage_str)
-            .map_err(|e| anyhow::anyhow!("invalid preimage JSON: {}", e))?;
+        // 1-2. Verify PoW and parse preimage (accepts raw JSON and base64)
+        let preimage = verify_and_parse(preimage_str, difficulty)?;
 
         // 3. Validate difficulty matches server target
         if preimage.difficulty != difficulty {
