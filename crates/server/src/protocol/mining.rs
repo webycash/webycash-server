@@ -61,19 +61,18 @@ pub fn verify_and_parse(
         );
     }
 
-    // 2. Parse: try raw JSON first, then base64-decoded JSON
-    if let Ok(preimage) = serde_json::from_str::<MiningPreimage>(preimage_str) {
-        return Ok(preimage);
+    // 2. Parse: try base64 decode first (GPU miners), then raw JSON (CPU miners)
+    if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(preimage_str.as_bytes()) {
+        if let Ok(json_str) = String::from_utf8(decoded) {
+            if let Ok(preimage) = serde_json::from_str::<MiningPreimage>(&json_str) {
+                return Ok(preimage);
+            }
+        }
     }
 
-    // Not valid JSON — try base64 decode
-    let decoded = base64::engine::general_purpose::STANDARD
-        .decode(preimage_str.as_bytes())
-        .map_err(|e| anyhow::anyhow!("preimage is neither valid JSON nor valid base64: {}", e))?;
-    let json_str = String::from_utf8(decoded)
-        .map_err(|e| anyhow::anyhow!("base64-decoded preimage is not valid UTF-8: {}", e))?;
-    serde_json::from_str::<MiningPreimage>(&json_str)
-        .map_err(|e| anyhow::anyhow!("base64-decoded preimage is not valid JSON: {}", e))
+    // Not base64 — parse as raw JSON
+    serde_json::from_str::<MiningPreimage>(preimage_str)
+        .map_err(|e| anyhow::anyhow!("invalid preimage (not base64 or JSON): {}", e))
 }
 
 /// Result of mining target query.
