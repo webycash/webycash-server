@@ -169,30 +169,22 @@ impl MinerActor {
             );
         }
 
-        // 5. Validate exactly one webcash output
-        if preimage.webcash.len() != 1 {
-            anyhow::bail!(
-                "preimage must contain exactly 1 webcash output, got {}",
-                preimage.webcash.len()
-            );
+        // 5. Validate webcash outputs (1 or more, total must equal mining_amount)
+        if preimage.webcash.is_empty() {
+            anyhow::bail!("preimage must contain at least 1 webcash output");
         }
 
         // ─── PHASE A: VALIDATE EVERYTHING (no writes) ───────────────────
 
-        // 6. Parse and validate all webcash outputs
+        // 6. Parse and validate all webcash outputs — total must equal mining_amount
         let now = chrono::Utc::now();
         let mut token_records = Vec::new();
+        let mut webcash_total_wats: i64 = 0;
 
         for wc_str in &preimage.webcash {
             let secret = SecretWebcash::from_str(wc_str)
                 .map_err(|e| anyhow::anyhow!("invalid webcash in preimage: {}", e))?;
-            if secret.amount.wats != state.mining_state.mining_amount_wats {
-                anyhow::bail!(
-                    "webcash amount {} does not match mining amount {}",
-                    secret.amount,
-                    Amount::from_wats(state.mining_state.mining_amount_wats)
-                );
-            }
+            webcash_total_wats += secret.amount.wats;
             let public = secret.to_public();
             token_records.push(TokenRecord {
                 public_hash: public.hash,
@@ -203,12 +195,21 @@ impl MinerActor {
                 origin: TokenOrigin::Mined,
             });
         }
+        if webcash_total_wats != state.mining_state.mining_amount_wats {
+            anyhow::bail!(
+                "webcash total {} does not match mining amount {}",
+                Amount::from_wats(webcash_total_wats),
+                Amount::from_wats(state.mining_state.mining_amount_wats)
+            );
+        }
 
         // 7. Parse and validate all subsidy outputs
         for sub_str in &preimage.subsidy {
             let secret = SecretWebcash::from_str(sub_str)
                 .map_err(|e| anyhow::anyhow!("invalid subsidy in preimage: {}", e))?;
-            if secret.amount.wats != state.mining_state.subsidy_amount_wats {
+            if state.mining_state.subsidy_amount_wats > 0
+                && secret.amount.wats != state.mining_state.subsidy_amount_wats
+            {
                 anyhow::bail!(
                     "subsidy amount {} does not match expected subsidy {}",
                     secret.amount,
