@@ -1,8 +1,21 @@
 use base64::Engine;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::Amount;
+
+/// Accept timestamp as either integer or float (C++ webminer sends float).
+fn deserialize_timestamp<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_u64() { Ok(i) }
+            else if let Some(f) = n.as_f64() { Ok(f as u64) }
+            else { Err(serde::de::Error::custom("timestamp must be a number")) }
+        }
+        _ => Err(serde::de::Error::custom("timestamp must be a number")),
+    }
+}
 
 /// Count leading zero bits in a 32-byte SHA256 hash.
 pub fn leading_zero_bits(hash: &[u8]) -> u32 {
@@ -39,6 +52,7 @@ pub fn verify_pow(preimage: &str, difficulty_bits: u32) -> bool {
 pub struct MiningPreimage {
     pub webcash: Vec<String>,
     pub subsidy: Vec<String>,
+    #[serde(deserialize_with = "deserialize_timestamp")]
     pub timestamp: u64,
     pub difficulty: u32,
 }
