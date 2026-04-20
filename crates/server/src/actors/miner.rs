@@ -178,23 +178,25 @@ impl MinerActor {
 
         // 6. Parse and validate all webcash outputs — total must equal mining_amount
         let now = chrono::Utc::now();
-        let mut token_records = Vec::new();
-        let mut webcash_total_wats: i64 = 0;
 
-        for wc_str in &preimage.webcash {
-            let secret = SecretWebcash::from_str(wc_str)
-                .map_err(|e| anyhow::anyhow!("invalid webcash in preimage: {}", e))?;
-            webcash_total_wats += secret.amount.wats;
-            let public = secret.to_public();
-            token_records.push(TokenRecord {
-                public_hash: public.hash,
-                amount_wats: secret.amount.wats,
-                spent: false,
-                created_at: now,
-                spent_at: None,
-                origin: TokenOrigin::Mined,
-            });
-        }
+        // 6. Parse and validate webcash outputs — total must equal mining_amount
+        let webcash_records: Vec<TokenRecord> = preimage.webcash.iter()
+            .map(|wc_str| {
+                let secret = SecretWebcash::from_str(wc_str)
+                    .map_err(|e| anyhow::anyhow!("invalid webcash in preimage: {}", e))?;
+                let public = secret.to_public();
+                Ok(TokenRecord {
+                    public_hash: public.hash,
+                    amount_wats: secret.amount.wats,
+                    spent: false,
+                    created_at: now,
+                    spent_at: None,
+                    origin: TokenOrigin::Mined,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        let webcash_total_wats: i64 = webcash_records.iter().map(|r| r.amount_wats).sum();
         if webcash_total_wats != state.mining_state.mining_amount_wats {
             anyhow::bail!(
                 "webcash total {} does not match mining amount {}",
@@ -203,29 +205,35 @@ impl MinerActor {
             );
         }
 
-        // 7. Parse and validate all subsidy outputs
-        for sub_str in &preimage.subsidy {
-            let secret = SecretWebcash::from_str(sub_str)
-                .map_err(|e| anyhow::anyhow!("invalid subsidy in preimage: {}", e))?;
-            if state.mining_state.subsidy_amount_wats > 0
-                && secret.amount.wats != state.mining_state.subsidy_amount_wats
-            {
-                anyhow::bail!(
-                    "subsidy amount {} does not match expected subsidy {}",
-                    secret.amount,
-                    Amount::from_wats(state.mining_state.subsidy_amount_wats)
-                );
-            }
-            let public = secret.to_public();
-            token_records.push(TokenRecord {
-                public_hash: public.hash,
-                amount_wats: secret.amount.wats,
-                spent: false,
-                created_at: now,
-                spent_at: None,
-                origin: TokenOrigin::Mined,
-            });
-        }
+        // 7. Parse and validate subsidy outputs
+        let subsidy_records: Vec<TokenRecord> = preimage.subsidy.iter()
+            .map(|sub_str| {
+                let secret = SecretWebcash::from_str(sub_str)
+                    .map_err(|e| anyhow::anyhow!("invalid subsidy in preimage: {}", e))?;
+                if state.mining_state.subsidy_amount_wats > 0
+                    && secret.amount.wats != state.mining_state.subsidy_amount_wats
+                {
+                    anyhow::bail!(
+                        "subsidy amount {} does not match expected subsidy {}",
+                        secret.amount,
+                        Amount::from_wats(state.mining_state.subsidy_amount_wats)
+                    );
+                }
+                let public = secret.to_public();
+                Ok(TokenRecord {
+                    public_hash: public.hash,
+                    amount_wats: secret.amount.wats,
+                    spent: false,
+                    created_at: now,
+                    spent_at: None,
+                    origin: TokenOrigin::Mined,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        let mut token_records: Vec<TokenRecord> = webcash_records.into_iter()
+            .chain(subsidy_records)
+            .collect();
 
         // 8. Compute new mining state with checked arithmetic (no writes yet)
         let total_mined = state
@@ -278,10 +286,11 @@ impl MinerActor {
         // 10. Persist mining state first (source of truth for circulation)
         self.store.update_mining_state(&new_state).await?;
 
-        // 11. Insert all token records
-        for record in &token_records {
-            self.store.insert_token(record).await?;
-        }
+        // 11. Insert all token records (deduplicate — C++ format duplicates subsidy)
+        token_records.dedup_by_key(|r| r.public_hash.clone());
+        futures::future::try_join_all(
+            token_records.iter().map(|r| self.store.insert_token(r))
+        ).await?;
 
         // Commit in-memory state only after all writes succeed
         state.mining_state = new_state;
