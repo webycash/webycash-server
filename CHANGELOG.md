@@ -1,6 +1,25 @@
 # Changelog
 
-## [0.1.0] - 2026-04-14
+All notable changes to `webycash-server` are documented here.
+
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+
+## [0.1.0] - 2026-04-21
+
+### Fixed
+- **Mining validation**: Accept multiple webcash outputs (match webcash.org behavior).
+- **Float timestamps**: Accept floating-point timestamps in mining preimage (C++ webminer compat).
+- **Token deduplication**: Deduplicate token inserts when C++ format duplicates subsidy hash.
+- **Base64 preimages**: Try base64 decode first, then raw JSON fallback (GPU WorkUnit format).
+- **CI**: Add `contents:write` permission for release artifact upload.
+- **FoundationDB**: Add `boot()` call, fix docker-compose networking.
+
+### Added
+- Production Dockerfile (Alpine) with multi-stage build.
+- Terraform Kubernetes module (`terraform/webcash-server-k8s/`).
+- CI pipeline: test on push, cross-compile release binaries (Linux x86/arm64, FreeBSD x86).
+
+### Initial (2026-04-14)
 
 ### Added
 - Webcash protocol types (Amount with overflow-safe arithmetic, SecretWebcash, PublicWebcash)
