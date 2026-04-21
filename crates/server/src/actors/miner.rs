@@ -264,9 +264,8 @@ impl MinerActor {
         // 10. Persist mining state first (source of truth for circulation)
         self.store.update_mining_state(&new_state).await?;
 
-        // 11. Insert all token records (already deduplicated in Phase A)
-        futures::future::try_join_all(token_records.iter().map(|r| self.store.insert_token(r)))
-            .await?;
+        // 11. Insert all token records — single pipelined batch
+        self.store.insert_tokens(&token_records).await?;
 
         // Commit in-memory state only after all writes succeed
         state.mining_state = new_state;

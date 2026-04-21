@@ -119,9 +119,61 @@ impl DynamoDbStore {
     }
 }
 
+use super::{ReplaceOp, ReplaceResult};
+
 #[async_trait]
 impl LedgerStore for DynamoDbStore {
-    async fn insert_token(&self, record: &TokenRecord) -> anyhow::Result<()> {
+    async fn insert_tokens(&self, records: &[TokenRecord]) -> anyhow::Result<()> {
+        // DynamoDB: parallel PutItem with condition expressions
+        futures::future::try_join_all(records.iter().map(|record| self.put_token(record))).await?;
+        Ok(())
+    }
+
+    async fn get_tokens(&self, hashes: &[String]) -> anyhow::Result<Vec<Option<TokenRecord>>> {
+        futures::future::try_join_all(hashes.iter().map(|h| self.get_token_impl(h))).await
+    }
+
+    async fn check_tokens(&self, hashes: &[String]) -> anyhow::Result<Vec<(String, Option<bool>)>> {
+        let tokens = self.get_tokens(hashes).await?;
+        Ok(hashes
+            .iter()
+            .zip(tokens)
+            .map(|(h, t)| (h.clone(), t.map(|r| r.spent)))
+            .collect())
+    }
+
+    async fn batch_replace(&self, ops: &[ReplaceOp]) -> Vec<ReplaceResult> {
+        futures::future::join_all(ops.iter().map(|op| async move {
+            match self.exec_replace_internal_wrap(op).await {
+                Ok(()) => ReplaceResult::Ok,
+                Err(e) => ReplaceResult::Failed(e.to_string()),
+            }
+        }))
+        .await
+    }
+
+    async fn batch_burn(&self, ops: &[(String, BurnRecord)]) -> anyhow::Result<()> {
+        futures::future::try_join_all(
+            ops.iter()
+                .map(|(hash, record)| self.burn_token_impl(hash, record)),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn get_mining_state(&self) -> anyhow::Result<Option<MiningState>> {
+        self.get_mining_state_impl().await
+    }
+
+    async fn update_mining_state(&self, state: &MiningState) -> anyhow::Result<()> {
+        self.update_mining_state_impl(state).await
+    }
+}
+
+// ── Internal methods (not part of trait) ─────────────────────────────────────
+
+impl DynamoDbStore {
+    async fn put_token(&self, record: &TokenRecord) -> anyhow::Result<()> {
         let json = serde_json::to_string(record)?;
         self.client
             .put_item()
@@ -136,7 +188,7 @@ impl LedgerStore for DynamoDbStore {
         Ok(())
     }
 
-    async fn get_token(&self, public_hash: &str) -> anyhow::Result<Option<TokenRecord>> {
+    async fn get_token_impl(&self, public_hash: &str) -> anyhow::Result<Option<TokenRecord>> {
         let result = self
             .client
             .get_item()
@@ -157,48 +209,12 @@ impl LedgerStore for DynamoDbStore {
         }
     }
 
-    async fn mark_spent(&self, public_hash: &str) -> anyhow::Result<bool> {
-        let token = self.get_token(public_hash).await?;
-        match token {
-            None => Ok(false),
-            Some(t) if t.spent => Ok(false),
-            Some(t) => {
-                let spent_token = TokenRecord {
-                    spent: true,
-                    spent_at: Some(chrono::Utc::now()),
-                    ..t
-                };
-                let json = serde_json::to_string(&spent_token)?;
-                // Condition: token must still exist and not be spent (prevents TOCTOU race)
-                let result = self
-                    .client
-                    .put_item()
-                    .table_name(self.tokens_table())
-                    .item("public_hash", AttributeValue::S(public_hash.to_string()))
-                    .item("data", AttributeValue::S(json))
-                    .item("spent", AttributeValue::Bool(true))
-                    .condition_expression(
-                        "attribute_exists(public_hash) AND (attribute_not_exists(spent) OR spent = :false_val)",
-                    )
-                    .expression_attribute_values(":false_val", AttributeValue::Bool(false))
-                    .send()
-                    .await;
-                match result {
-                    Ok(_) => Ok(true),
-                    Err(e) => {
-                        let err_str = e.to_string();
-                        if err_str.contains("ConditionalCheckFailed") {
-                            Ok(false) // Already spent by concurrent request
-                        } else {
-                            Err(anyhow::anyhow!("mark_spent failed: {}", err_str))
-                        }
-                    }
-                }
-            }
-        }
+    async fn exec_replace_internal_wrap(&self, op: &ReplaceOp) -> anyhow::Result<()> {
+        self.exec_replace_internal(&op.inputs, &op.outputs, &op.record)
+            .await
     }
 
-    async fn atomic_replace(
+    async fn exec_replace_internal(
         &self,
         inputs: &[String],
         outputs: &[TokenRecord],
@@ -214,7 +230,7 @@ impl LedgerStore for DynamoDbStore {
                 let hash = hash.clone();
                 async move {
                     let token = self
-                        .get_token(&hash)
+                        .get_token_impl(&hash)
                         .await?
                         .ok_or_else(|| anyhow::anyhow!("input token not found: {}", hash))?;
                     if token.spent {
@@ -301,7 +317,7 @@ impl LedgerStore for DynamoDbStore {
         Ok(())
     }
 
-    async fn get_mining_state(&self) -> anyhow::Result<Option<MiningState>> {
+    async fn get_mining_state_impl(&self) -> anyhow::Result<Option<MiningState>> {
         let result = self
             .client
             .get_item()
@@ -322,7 +338,7 @@ impl LedgerStore for DynamoDbStore {
         }
     }
 
-    async fn update_mining_state(&self, state: &MiningState) -> anyhow::Result<()> {
+    async fn update_mining_state_impl(&self, state: &MiningState) -> anyhow::Result<()> {
         let json = serde_json::to_string(state)?;
         self.client
             .put_item()
@@ -334,12 +350,12 @@ impl LedgerStore for DynamoDbStore {
         Ok(())
     }
 
-    async fn burn_token(&self, public_hash: &str, record: &BurnRecord) -> anyhow::Result<()> {
+    async fn burn_token_impl(&self, public_hash: &str, record: &BurnRecord) -> anyhow::Result<()> {
         use aws_sdk_dynamodb::types::{Put, TransactWriteItem};
 
         // Atomic: mark spent + write audit in single transaction
         let token = self
-            .get_token(public_hash)
+            .get_token_impl(public_hash)
             .await?
             .ok_or_else(|| anyhow::anyhow!("token not found: {}", public_hash))?;
         if token.spent {
@@ -394,16 +410,5 @@ impl LedgerStore for DynamoDbStore {
             .map_err(|e| anyhow::anyhow!("burn transaction failed: {}", e))?;
 
         Ok(())
-    }
-
-    async fn check_tokens(&self, hashes: &[String]) -> anyhow::Result<Vec<(String, Option<bool>)>> {
-        futures::future::try_join_all(hashes.iter().map(|hash| {
-            let hash = hash.clone();
-            async move {
-                let token = self.get_token(&hash).await?;
-                Ok::<_, anyhow::Error>((hash, token.map(|t| t.spent)))
-            }
-        }))
-        .await
     }
 }

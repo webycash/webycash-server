@@ -60,27 +60,59 @@ pub struct EconomyStats {
     pub subsidy_amount_wats: i64,
 }
 
-/// The central database abstraction. Every backend implements this single trait.
-/// All methods take &self — implementations hold their own connection pools.
+/// A single replace operation within a batch.
+#[derive(Debug, Clone)]
+pub struct ReplaceOp {
+    pub inputs: Vec<String>,
+    pub outputs: Vec<TokenRecord>,
+    pub record: ReplacementRecord,
+}
+
+/// Result of a single replace operation within a batch.
+#[derive(Debug)]
+pub enum ReplaceResult {
+    Ok,
+    Failed(String),
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LedgerStore: batch-native trait.
+//
+// Every operation is batch-first. Single operations are batches of 1.
+// Backends implement the batch methods and decide internally how to execute
+// them (Redis pipeline, DynamoDB BatchWriteItem, FDB transaction batching).
+// ─────────────────────────────────────────────────────────────────────────────
+
 #[async_trait]
 pub trait LedgerStore: Send + Sync + 'static {
-    /// Insert a new unspent token. Fails if hash already exists.
-    async fn insert_token(&self, record: &TokenRecord) -> anyhow::Result<()>;
+    // ── Token operations ─────────────────────────────────────────────
 
-    /// Look up a token by its public hash. Returns None if not found.
-    async fn get_token(&self, public_hash: &str) -> anyhow::Result<Option<TokenRecord>>;
+    /// Insert tokens. Each must have a unique hash — duplicates fail.
+    /// Backend pipelines all inserts in minimal round-trips.
+    async fn insert_tokens(&self, records: &[TokenRecord]) -> anyhow::Result<()>;
 
-    /// Mark a token as spent. Returns false if already spent or not found.
-    async fn mark_spent(&self, public_hash: &str) -> anyhow::Result<bool>;
+    /// Look up tokens by public hash. Returns in same order as input.
+    /// Backend pipelines all lookups in minimal round-trips.
+    async fn get_tokens(&self, hashes: &[String]) -> anyhow::Result<Vec<Option<TokenRecord>>>;
 
-    /// Atomic replacement: mark all inputs spent, insert all outputs,
-    /// and write the audit record. Entire operation succeeds or fails.
-    async fn atomic_replace(
-        &self,
-        inputs: &[String],
-        outputs: &[TokenRecord],
-        record: &ReplacementRecord,
-    ) -> anyhow::Result<()>;
+    /// Check spent status for multiple tokens.
+    /// Returns (hash, Option<bool>) in same order: None = not found.
+    async fn check_tokens(&self, hashes: &[String]) -> anyhow::Result<Vec<(String, Option<bool>)>>;
+
+    // ── Atomic replace (batch) ───────────────────────────────────────
+
+    /// Execute a batch of atomic replace operations.
+    /// Each operation independently succeeds or fails.
+    /// Backend pipelines all operations in minimal round-trips.
+    /// A batch of 1 is a single replace — this is the primary API.
+    async fn batch_replace(&self, ops: &[ReplaceOp]) -> Vec<ReplaceResult>;
+
+    // ── Burn (batch) ─────────────────────────────────────────────────
+
+    /// Burn multiple tokens. Each independently verified and marked spent.
+    async fn batch_burn(&self, ops: &[(String, BurnRecord)]) -> anyhow::Result<()>;
+
+    // ── Mining state ─────────────────────────────────────────────────
 
     /// Get current mining state.
     async fn get_mining_state(&self) -> anyhow::Result<Option<MiningState>>;
@@ -88,12 +120,7 @@ pub trait LedgerStore: Send + Sync + 'static {
     /// Update mining state.
     async fn update_mining_state(&self, state: &MiningState) -> anyhow::Result<()>;
 
-    /// Burn a token: mark spent and write burn audit record.
-    async fn burn_token(&self, public_hash: &str, record: &BurnRecord) -> anyhow::Result<()>;
-
-    /// Check multiple tokens' spent status.
-    /// Returns (hash, Option<bool>): None = not found, Some(true) = spent, Some(false) = unspent.
-    async fn check_tokens(&self, hashes: &[String]) -> anyhow::Result<Vec<(String, Option<bool>)>>;
+    // ── Derived ──────────────────────────────────────────────────────
 
     /// Get economy statistics. Default: derived from mining state.
     async fn get_stats(&self) -> anyhow::Result<EconomyStats> {
@@ -112,25 +139,89 @@ pub trait LedgerStore: Send + Sync + 'static {
     }
 }
 
-/// Blanket impl so Box<dyn LedgerStore> satisfies LedgerStore.
+// ── Convenience: single-operation wrappers ──────────────────────────────────
+// These exist so callers that need only one operation don't have to build a
+// batch. They delegate to the batch methods.
+
+/// Extension methods for single-operation convenience.
 #[async_trait]
-impl LedgerStore for Box<dyn LedgerStore> {
+pub trait LedgerStoreExt: LedgerStore {
     async fn insert_token(&self, record: &TokenRecord) -> anyhow::Result<()> {
-        (**self).insert_token(record).await
+        self.insert_tokens(std::slice::from_ref(record)).await
     }
-    async fn get_token(&self, public_hash: &str) -> anyhow::Result<Option<TokenRecord>> {
-        (**self).get_token(public_hash).await
+
+    async fn get_token(&self, hash: &str) -> anyhow::Result<Option<TokenRecord>> {
+        Ok(self
+            .get_tokens(&[hash.to_string()])
+            .await?
+            .into_iter()
+            .next()
+            .flatten())
     }
-    async fn mark_spent(&self, public_hash: &str) -> anyhow::Result<bool> {
-        (**self).mark_spent(public_hash).await
-    }
+
     async fn atomic_replace(
         &self,
         inputs: &[String],
         outputs: &[TokenRecord],
         record: &ReplacementRecord,
     ) -> anyhow::Result<()> {
-        (**self).atomic_replace(inputs, outputs, record).await
+        let op = ReplaceOp {
+            inputs: inputs.to_vec(),
+            outputs: outputs.to_vec(),
+            record: record.clone(),
+        };
+        let results = self.batch_replace(&[op]).await;
+        match results.into_iter().next() {
+            Some(ReplaceResult::Ok) => Ok(()),
+            Some(ReplaceResult::Failed(e)) => Err(anyhow::anyhow!("{e}")),
+            None => Err(anyhow::anyhow!("no result from batch_replace")),
+        }
+    }
+
+    async fn burn_token(&self, hash: &str, record: &BurnRecord) -> anyhow::Result<()> {
+        self.batch_burn(&[(hash.to_string(), record.clone())]).await
+    }
+
+    async fn mark_spent(&self, hash: &str) -> anyhow::Result<bool> {
+        let tokens = self.get_tokens(&[hash.to_string()]).await?;
+        match tokens.into_iter().next().flatten() {
+            None => Ok(false),
+            Some(t) if t.spent => Ok(false),
+            Some(_) => {
+                // Use a dummy burn record to mark spent via the batch interface
+                let record = BurnRecord {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    public_hash: hash.to_string(),
+                    amount_wats: 0,
+                    burned_at: chrono::Utc::now(),
+                };
+                self.batch_burn(&[(hash.to_string(), record)]).await?;
+                Ok(true)
+            }
+        }
+    }
+}
+
+// Blanket impl: every LedgerStore gets the convenience methods
+impl<T: LedgerStore + ?Sized> LedgerStoreExt for T {}
+
+/// Blanket impl so Box<dyn LedgerStore> satisfies LedgerStore.
+#[async_trait]
+impl LedgerStore for Box<dyn LedgerStore> {
+    async fn insert_tokens(&self, records: &[TokenRecord]) -> anyhow::Result<()> {
+        (**self).insert_tokens(records).await
+    }
+    async fn get_tokens(&self, hashes: &[String]) -> anyhow::Result<Vec<Option<TokenRecord>>> {
+        (**self).get_tokens(hashes).await
+    }
+    async fn check_tokens(&self, hashes: &[String]) -> anyhow::Result<Vec<(String, Option<bool>)>> {
+        (**self).check_tokens(hashes).await
+    }
+    async fn batch_replace(&self, ops: &[ReplaceOp]) -> Vec<ReplaceResult> {
+        (**self).batch_replace(ops).await
+    }
+    async fn batch_burn(&self, ops: &[(String, BurnRecord)]) -> anyhow::Result<()> {
+        (**self).batch_burn(ops).await
     }
     async fn get_mining_state(&self) -> anyhow::Result<Option<MiningState>> {
         (**self).get_mining_state().await
@@ -138,13 +229,6 @@ impl LedgerStore for Box<dyn LedgerStore> {
     async fn update_mining_state(&self, state: &MiningState) -> anyhow::Result<()> {
         (**self).update_mining_state(state).await
     }
-    async fn burn_token(&self, public_hash: &str, record: &BurnRecord) -> anyhow::Result<()> {
-        (**self).burn_token(public_hash, record).await
-    }
-    async fn check_tokens(&self, hashes: &[String]) -> anyhow::Result<Vec<(String, Option<bool>)>> {
-        (**self).check_tokens(hashes).await
-    }
-    // get_stats: uses default trait method
 }
 
 /// Create a LedgerStore from config.
@@ -168,9 +252,6 @@ pub async fn create_store(config: &Config) -> anyhow::Result<Box<dyn LedgerStore
         DbBackend::FoundationDb => {
             #[cfg(feature = "fdb")]
             {
-                // Safety: must be called exactly once before any FDB API usage.
-                // The foundationdb crate requires network boot before Database::new().
-                // Leak the guard so the network stays alive for the process lifetime.
                 let network = unsafe { ::foundationdb::boot() };
                 std::mem::forget(network);
                 let cluster_file = config.server.db.fdb_cluster_file.as_deref();
@@ -188,7 +269,6 @@ pub async fn create_store(config: &Config) -> anyhow::Result<Box<dyn LedgerStore
         DbBackend::RedisFdb => {
             #[cfg(feature = "fdb")]
             {
-                // Safety: must be called exactly once before any FDB API usage.
                 let network = unsafe { ::foundationdb::boot() };
                 std::mem::forget(network);
                 let redis_url = config

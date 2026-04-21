@@ -10,7 +10,7 @@ use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 
-use crate::db::{LedgerStore, ReplacementRecord, TokenOrigin, TokenRecord};
+use crate::db::{LedgerStore, LedgerStoreExt, ReplacementRecord, TokenOrigin, TokenRecord};
 use crate::protocol::{Amount, SecretWebcash};
 
 /// Parse and validate input webcash strings. Pure computation, no IO.

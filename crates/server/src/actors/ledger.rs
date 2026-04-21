@@ -1,7 +1,7 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::db::{BurnRecord, LedgerStore, TokenRecord};
+use crate::db::{BurnRecord, LedgerStore, LedgerStoreExt, TokenRecord};
 use crate::protocol::{Amount, PublicWebcash, SecretWebcash};
 use webycash_macros::gen_server;
 
@@ -62,35 +62,43 @@ impl LedgerActor {
         store: &Arc<dyn LedgerStore>,
         public_webcash_strings: Vec<String>,
     ) -> anyhow::Result<Vec<(String, Option<bool>, Option<String>)>> {
-        futures::future::try_join_all(public_webcash_strings.iter().map(|full_str| {
-            let store = store.clone();
-            let full_str = full_str.clone();
-            async move {
-                let lookup_hash = if full_str.contains(":public:") {
-                    PublicWebcash::from_str(&full_str)
-                        .map_err(|e| anyhow::anyhow!("invalid public webcash: {e}"))?
-                        .hash
+        // Parse all hashes first (pure, no IO)
+        let lookup_hashes: Vec<String> = public_webcash_strings
+            .iter()
+            .map(|full_str| {
+                if full_str.contains(":public:") {
+                    PublicWebcash::from_str(full_str)
+                        .map(|p| p.hash)
+                        .map_err(|e| anyhow::anyhow!("invalid public webcash: {e}"))
                 } else {
-                    full_str.clone()
-                };
-                let token = store.get_token(&lookup_hash).await?;
-                Ok(match token {
-                    None => (full_str, None, None),
-                    Some(t) => (
-                        full_str,
-                        Some(t.spent),
-                        Some(Amount::from_wats(t.amount_wats).to_string()),
-                    ),
-                })
-            }
-        }))
-        .await
+                    Ok(full_str.clone())
+                }
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        // Single batch lookup — one pipelined round-trip
+        let tokens = store.get_tokens(&lookup_hashes).await?;
+
+        // Transform results (pure)
+        Ok(public_webcash_strings
+            .into_iter()
+            .zip(tokens)
+            .map(|(full_str, token)| match token {
+                None => (full_str, None, None),
+                Some(t) => (
+                    full_str,
+                    Some(t.spent),
+                    Some(Amount::from_wats(t.amount_wats).to_string()),
+                ),
+            })
+            .collect())
     }
 
     pub async fn do_burn(
         store: &Arc<dyn LedgerStore>,
         webcashes: Vec<String>,
     ) -> anyhow::Result<()> {
+        // Parse all inputs (pure, no IO)
         let now = chrono::Utc::now();
         let burn_ops: Vec<_> = webcashes
             .iter()
@@ -108,12 +116,7 @@ impl LedgerActor {
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
-        futures::future::try_join_all(
-            burn_ops
-                .iter()
-                .map(|(hash, record)| store.burn_token(hash, record)),
-        )
-        .await?;
-        Ok(())
+        // Single batch burn — backend pipelines all operations
+        store.batch_burn(&burn_ops).await
     }
 }
