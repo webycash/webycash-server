@@ -24,7 +24,7 @@ handler!(ReplaceRequest, |state, req| {
     );
     match state
         .server
-        .ledger()
+        .batcher
         .replace(req.webcashes, req.new_webcashes)
         .await
     {

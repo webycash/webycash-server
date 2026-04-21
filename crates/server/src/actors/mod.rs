@@ -1,3 +1,4 @@
+pub mod batcher;
 pub mod ledger;
 pub mod miner;
 pub mod stats;

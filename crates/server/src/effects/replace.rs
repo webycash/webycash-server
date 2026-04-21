@@ -62,23 +62,29 @@ fn parse_outputs(
     )
 }
 
-/// Execute a replace operation: pure validation then ONE atomic DB call.
-///
-/// Phase 1 (pure, zero IO): parse tokens, validate amounts, conservation check.
-/// Phase 2 (single RTT): atomic_replace validates inputs exist + unspent,
-///   marks spent, inserts outputs, writes audit — all in one transaction.
-///
-/// This is N+1 → 1 round-trip optimization. The backends already enforce
-/// input existence and double-spend prevention atomically:
-/// - Redis: Lua script checks all inputs before any mutation
-/// - DynamoDB: TransactWriteItems with condition expressions
-/// - FDB: serializable transaction isolation
-pub async fn execute_replace(
-    store: &dyn LedgerStore,
+/// Pre-validated replace data ready for batch execution.
+pub struct ReplaceValidated {
+    pub input_hashes: Vec<String>,
+    pub output_records: Vec<TokenRecord>,
+    pub record: ReplacementRecord,
+}
+
+impl ReplaceValidated {
+    pub fn into_op(self) -> crate::db::ReplaceOp {
+        crate::db::ReplaceOp {
+            inputs: self.input_hashes,
+            outputs: self.output_records,
+            record: self.record,
+        }
+    }
+}
+
+/// Pure validation: parse tokens, check amounts, conservation law.
+/// Returns validated data ready for batch execution. Zero IO.
+pub fn parse_and_validate_replace(
     webcashes: Vec<String>,
     new_webcashes: Vec<String>,
-) -> anyhow::Result<()> {
-    // Phase 1: Pure computation — parse, validate, conservation check
+) -> anyhow::Result<ReplaceValidated> {
     let (input_hashes, input_total) =
         parse_inputs(&webcashes).map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -109,8 +115,21 @@ pub async fn execute_replace(
         created_at: now,
     };
 
-    // Phase 2: Single atomic DB call — validates + mutates in one round-trip
+    Ok(ReplaceValidated {
+        input_hashes,
+        output_records,
+        record,
+    })
+}
+
+/// Execute a replace: pure validation then ONE atomic DB call.
+pub async fn execute_replace(
+    store: &dyn LedgerStore,
+    webcashes: Vec<String>,
+    new_webcashes: Vec<String>,
+) -> anyhow::Result<()> {
+    let v = parse_and_validate_replace(webcashes, new_webcashes)?;
     store
-        .atomic_replace(&input_hashes, &output_records, &record)
+        .atomic_replace(&v.input_hashes, &v.output_records, &v.record)
         .await
 }
