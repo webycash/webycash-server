@@ -1,6 +1,9 @@
-//! In-Docker replace benchmark. HTTP/1.1 connection pool per server.
+//! In-Docker replace benchmark. Persistent HTTP/1.1 keep-alive connection pool.
 //!
-//! Usage: bench_replace [SERVERS] [CONCURRENCY] [OPS_PER_SERVER]
+//! Each server gets N persistent connections. Requests dispatched via mpsc channels.
+//! Zero TCP handshake per request — connections auto-reconnect on failure.
+//!
+//! Usage: bench_replace [SERVERS] [CONCURRENCY] [OPS_PER_SERVER] [CONNS_PER_SERVER]
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -11,7 +14,7 @@ use http_body_util::{BodyExt, Full};
 use hyper::Request;
 use hyper_util::rt::TokioIo;
 use sha2::{Digest, Sha256};
-use tokio::sync::Semaphore;
+use tokio::sync::{mpsc, Semaphore};
 
 fn random_hex64() -> String {
     use rand::Rng;
@@ -33,60 +36,92 @@ fn mine_preimage(webcash_str: &str) -> String {
     unreachable!()
 }
 
-async fn http_get(addr: &str, path: &str) -> u16 {
-    let stream = match tokio::net::TcpStream::connect(addr).await {
-        Ok(s) => s,
-        Err(_) => return 0,
-    };
-    let _ = stream.set_nodelay(true);
-    let (mut sender, conn) = match hyper::client::conn::http1::handshake(TokioIo::new(stream)).await
-    {
-        Ok(r) => r,
-        Err(_) => return 0,
-    };
-    tokio::spawn(conn);
-    let req = Request::builder()
-        .method("GET")
-        .uri(format!("http://{addr}{path}"))
-        .body(Full::new(Bytes::new()))
-        .unwrap();
-    match sender.send_request(req).await {
-        Ok(resp) => {
-            let status = resp.status().as_u16();
-            let _ = resp.into_body().collect().await;
-            status
-        }
-        Err(_) => 0,
-    }
+struct Job {
+    method: &'static str,
+    path: String,
+    body: Vec<u8>,
+    reply: tokio::sync::oneshot::Sender<u16>,
 }
 
-async fn http_post(addr: &str, path: &str, body: &[u8]) -> u16 {
-    let stream = match tokio::net::TcpStream::connect(addr).await {
-        Ok(s) => s,
-        Err(_) => return 0,
-    };
-    let _ = stream.set_nodelay(true);
-    let (mut sender, conn) = match hyper::client::conn::http1::handshake(TokioIo::new(stream)).await
-    {
-        Ok(r) => r,
-        Err(_) => return 0,
-    };
-    tokio::spawn(conn);
+/// Pool of persistent HTTP/1.1 keep-alive connections to one server.
+struct ConnPool {
+    txs: Vec<mpsc::Sender<Job>>,
+    idx: AtomicU64,
+}
 
-    let req = Request::builder()
-        .method("POST")
-        .uri(format!("http://{addr}{path}"))
-        .header("content-type", "application/json")
-        .body(Full::new(Bytes::from(body.to_vec())))
-        .unwrap();
-
-    match sender.send_request(req).await {
-        Ok(resp) => {
-            let status = resp.status().as_u16();
-            let _ = resp.into_body().collect().await;
-            status
+impl ConnPool {
+    async fn new(addr: &str, n: usize) -> Self {
+        let txs: Vec<_> = (0..n)
+            .map(|_| {
+                let (tx, rx) = mpsc::channel::<Job>(2048);
+                let addr = addr.to_string();
+                tokio::spawn(Self::worker(addr, rx));
+                tx
+            })
+            .collect();
+        Self {
+            txs,
+            idx: AtomicU64::new(0),
         }
-        Err(_) => 0,
+    }
+
+    async fn worker(addr: String, mut rx: mpsc::Receiver<Job>) {
+        loop {
+            let stream = match tokio::net::TcpStream::connect(&addr).await {
+                Ok(s) => {
+                    let _ = s.set_nodelay(true);
+                    s
+                }
+                Err(_) => {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                    continue;
+                }
+            };
+            let (mut sender, conn) =
+                match hyper::client::conn::http1::handshake(TokioIo::new(stream)).await {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+            tokio::spawn(conn);
+
+            while let Some(job) = rx.recv().await {
+                if !sender.is_ready() {
+                    let _ = job.reply.send(0);
+                    break;
+                }
+                let req = Request::builder()
+                    .method(job.method)
+                    .uri(format!("http://{}{}", addr, job.path))
+                    .header("content-type", "application/json")
+                    .body(Full::new(Bytes::from(job.body)))
+                    .unwrap();
+                match sender.send_request(req).await {
+                    Ok(resp) => {
+                        let status = resp.status().as_u16();
+                        let _ = resp.into_body().collect().await;
+                        let _ = job.reply.send(status);
+                    }
+                    Err(_) => {
+                        let _ = job.reply.send(0);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn request(&self, method: &'static str, path: &str, body: Vec<u8>) -> u16 {
+        let i = self.idx.fetch_add(1, Ordering::Relaxed) as usize % self.txs.len();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let _ = self.txs[i]
+            .send(Job {
+                method,
+                path: path.to_string(),
+                body,
+                reply: tx,
+            })
+            .await;
+        rx.await.unwrap_or(0)
     }
 }
 
@@ -100,8 +135,8 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| "http://server-1:8080,http://server-2:8080,http://server-3:8080".into());
     let concurrency: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(256);
     let ops_per_server: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(5000);
+    let conns_per_server: usize = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(64);
 
-    // Parse server addresses (host:port)
     let addrs: Vec<String> = servers_str
         .split(',')
         .map(|s| {
@@ -114,147 +149,145 @@ async fn main() -> anyhow::Result<()> {
         })
         .collect();
 
-    eprintln!("======================================================================");
-    eprintln!("  Rust Replace Benchmark (HTTP/1.1 pool, inside Docker)");
+    eprintln!("{}", "=".repeat(70));
+    eprintln!("  Rust Replace Bench (keep-alive pool, inside Docker)");
     eprintln!("  Servers: {:?}", addrs);
-    eprintln!("  Concurrency: {concurrency}, Ops/server: {ops_per_server}");
-    eprintln!("======================================================================");
+    eprintln!("  c={concurrency} ops/srv={ops_per_server} conns/srv={conns_per_server}");
+    eprintln!("{}", "=".repeat(70));
 
-    // Wait for servers
-    for addr in &addrs {
-        eprint!("  Connecting to {addr}...");
-        loop {
-            if http_get(addr, "/api/v1/health").await == 200 {
-                eprintln!(" UP");
-                break;
+    // Create pools + wait for health
+    let pools: Vec<Arc<ConnPool>> = futures::future::join_all(addrs.iter().map(|addr| {
+        let addr = addr.clone();
+        async move {
+            let pool = Arc::new(ConnPool::new(&addr, conns_per_server).await);
+            loop {
+                if pool.request("GET", "/api/v1/health", Vec::new()).await == 200 {
+                    eprintln!("  {addr} UP");
+                    break;
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             }
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            pool
         }
-    }
+    }))
+    .await;
 
-    // Pre-mine tokens concurrently
-    eprintln!("\n--- Pre-mining {ops_per_server} tokens per server ---");
-    let mine_start = Instant::now();
-    let sem = Arc::new(Semaphore::new(128));
-
+    // Pre-mine
+    eprintln!("\n--- Mining {ops_per_server}/server ---");
+    let t0 = Instant::now();
+    let sem = Arc::new(Semaphore::new(256));
     let all_tokens: Vec<Vec<String>> =
-        futures::future::join_all(addrs.iter().enumerate().map(|(idx, addr)| {
-            let addr = addr.clone();
+        futures::future::join_all(pools.iter().enumerate().map(|(i, pool)| {
+            let pool = pool.clone();
             let sem = sem.clone();
             async move {
-                let mut handles = Vec::new();
-                for _ in 0..ops_per_server {
-                    let permit = sem.clone().acquire_owned().await.unwrap();
-                    let addr = addr.clone();
-                    handles.push(tokio::spawn(async move {
-                        let secret = random_hex64();
-                        let wc = format!("e200.00000000:secret:{secret}");
-                        let preimage = mine_preimage(&wc);
-                        let body = serde_json::to_vec(&serde_json::json!({
-                            "preimage": preimage,
-                            "legalese": {"terms": true}
-                        }))
-                        .unwrap();
-                        let status = http_post(&addr, "/api/v1/mining_report", &body).await;
-                        drop(permit);
-                        if status == 200 {
-                            Some(wc)
-                        } else {
-                            None
-                        }
-                    }));
-                }
+                let handles: Vec<_> = (0..ops_per_server)
+                    .map(|_| {
+                        let pool = pool.clone();
+                        let sem = sem.clone();
+                        tokio::spawn(async move {
+                            let _p = sem.acquire_owned().await.unwrap();
+                            let secret = random_hex64();
+                            let wc = format!("e200.00000000:secret:{secret}");
+                            let preimage = mine_preimage(&wc);
+                            let body = serde_json::to_vec(&serde_json::json!({
+                                "preimage": preimage, "legalese": {"terms": true}
+                            }))
+                            .unwrap();
+                            if pool.post("/api/v1/mining_report", body).await == 200 {
+                                Some(wc)
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                    .collect();
                 let tokens: Vec<String> = futures::future::join_all(handles)
                     .await
                     .into_iter()
                     .filter_map(|r| r.ok().flatten())
                     .collect();
-                eprintln!("  Server {}: {} tokens", idx + 1, tokens.len());
+                eprintln!("  srv{}: {} tokens", i + 1, tokens.len());
                 tokens
             }
         }))
         .await;
-
-    let total_mined: usize = all_tokens.iter().map(|t| t.len()).sum();
-    let mine_elapsed = mine_start.elapsed();
+    let mined = all_tokens.iter().map(|t| t.len()).sum::<usize>();
     eprintln!(
-        "  Total: {} tokens in {:.1}s ({:.0} mine/s)\n",
-        total_mined,
-        mine_elapsed.as_secs_f64(),
-        total_mined as f64 / mine_elapsed.as_secs_f64()
+        "  {mined} in {:.1}s ({:.0}/s)\n",
+        t0.elapsed().as_secs_f64(),
+        mined as f64 / t0.elapsed().as_secs_f64()
     );
 
-    // Build replace workload
-    let mut work: Vec<(String, Vec<u8>)> = Vec::new();
-    for (tokens, addr) in all_tokens.iter().zip(addrs.iter()) {
-        for wc in tokens {
-            let body = serde_json::to_vec(&serde_json::json!({
-                "webcashes": [wc],
-                "new_webcashes": [
-                    format!("e100.00000000:secret:{}", random_hex64()),
-                    format!("e100.00000000:secret:{}", random_hex64()),
-                ],
-                "legalese": {"terms": true}
-            }))
-            .unwrap();
-            work.push((addr.clone(), body));
-        }
-    }
+    // Build workload
+    let work: Vec<(usize, Vec<u8>)> = all_tokens
+        .iter()
+        .enumerate()
+        .flat_map(|(idx, tokens)| {
+            tokens.iter().map(move |wc| {
+                let body = serde_json::to_vec(&serde_json::json!({
+                    "webcashes": [wc],
+                    "new_webcashes": [
+                        format!("e100.00000000:secret:{}", random_hex64()),
+                        format!("e100.00000000:secret:{}", random_hex64()),
+                    ],
+                    "legalese": {"terms": true}
+                }))
+                .unwrap();
+                (idx, body)
+            })
+        })
+        .collect();
 
-    let total_ops = work.len();
-    eprintln!("--- Replace benchmark: {total_ops} ops, c={concurrency} ---");
+    let n = work.len();
+    eprintln!("--- REPLACE: {n} ops, c={concurrency}, {conns_per_server} conns/srv ---");
 
-    let ok_count = Arc::new(AtomicU64::new(0));
-    let err_count = Arc::new(AtomicU64::new(0));
+    let ok = Arc::new(AtomicU64::new(0));
+    let err = Arc::new(AtomicU64::new(0));
     let sem = Arc::new(Semaphore::new(concurrency));
 
     let start = Instant::now();
     let handles: Vec<_> = work
         .into_iter()
-        .map(|(addr, body)| {
+        .map(|(pi, body)| {
+            let pool = pools[pi].clone();
             let sem = sem.clone();
-            let ok = ok_count.clone();
-            let err = err_count.clone();
+            let ok = ok.clone();
+            let err = err.clone();
             tokio::spawn(async move {
-                let permit = sem.acquire_owned().await.unwrap();
-                let status = http_post(&addr, "/api/v1/replace", &body).await;
-                if status == 200 {
+                let _p = sem.acquire_owned().await.unwrap();
+                if pool.request("POST", "/api/v1/replace", body).await == 200 {
                     ok.fetch_add(1, Ordering::Relaxed);
                 } else {
                     err.fetch_add(1, Ordering::Relaxed);
                 }
-                drop(permit);
             })
         })
         .collect();
-
     futures::future::join_all(handles).await;
+
     let elapsed = start.elapsed();
+    let ok_n = ok.load(Ordering::Relaxed);
+    let err_n = err.load(Ordering::Relaxed);
+    let tps = ok_n as f64 / elapsed.as_secs_f64();
 
-    let ok = ok_count.load(Ordering::Relaxed);
-    let err = err_count.load(Ordering::Relaxed);
-    let tps = ok as f64 / elapsed.as_secs_f64();
-
-    eprintln!();
-    eprintln!("  {} ops in {:.2}s", total_ops, elapsed.as_secs_f64());
-    eprintln!("  {} ok, {} err", ok, err);
-    eprintln!(
-        "  {:.0} TPS ({} servers × c={})",
-        tps,
-        addrs.len(),
-        concurrency
-    );
-    eprintln!("  {:.0} TPS per server", tps / addrs.len() as f64);
-    if ok > 0 {
+    eprintln!("\n  {n} ops  {:.2}s", elapsed.as_secs_f64());
+    eprintln!("  {ok_n} ok  {err_n} err");
+    eprintln!("  {tps:.0} TPS total");
+    eprintln!("  {:.0} TPS/server", tps / addrs.len() as f64);
+    if ok_n > 0 {
         eprintln!(
-            "  {:.3}ms avg latency",
-            elapsed.as_millis() as f64 / ok as f64
+            "  {:.3}ms latency",
+            elapsed.as_millis() as f64 / ok_n as f64
         );
     }
-    eprintln!("\n======================================================================");
-
-    // Print machine-readable result for CI
+    eprintln!("{}", "=".repeat(70));
     println!("{:.0}", tps);
-
     Ok(())
+}
+
+impl ConnPool {
+    async fn post(&self, path: &str, body: Vec<u8>) -> u16 {
+        self.request("POST", path, body).await
+    }
 }
