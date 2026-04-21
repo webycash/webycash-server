@@ -1,31 +1,14 @@
+use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use ractor::{Actor, ActorProcessingErr, ActorRef};
+use ractor::ActorProcessingErr;
 
 use crate::config::{MiningConfig, NetworkMode, ServerConfig};
 use crate::db::{LedgerStore, TokenOrigin, TokenRecord};
 use crate::protocol::mining::{adjust_difficulty, verify_and_parse, MiningState, TargetInfo};
 use crate::protocol::{Amount, SecretWebcash};
-
-/// Handle to communicate with the MinerActor.
-#[derive(Clone)]
-pub struct MinerHandle {
-    actor: ActorRef<MinerMsg>,
-}
-
-/// Messages the MinerActor accepts.
-pub enum MinerMsg {
-    /// Get current mining target (difficulty, rewards).
-    GetTarget {
-        reply: tokio::sync::oneshot::Sender<anyhow::Result<TargetInfo>>,
-    },
-    /// Submit a proof-of-work mining report.
-    SubmitMiningReport {
-        preimage_str: String,
-        reply: tokio::sync::oneshot::Sender<anyhow::Result<MiningReportResult>>,
-    },
-}
+use webycash_macros::gen_server;
 
 #[derive(Debug)]
 pub struct MiningReportResult {
@@ -38,6 +21,8 @@ pub struct MinerState {
 
 /// Maximum allowed timestamp drift (5 minutes into the future).
 const MAX_TIMESTAMP_DRIFT_SECS: u64 = 300;
+/// Maximum allowed timestamp age (5 minutes in the past).
+const MIN_TIMESTAMP_AGE_SECS: u64 = 300;
 
 pub struct MinerActor {
     store: Arc<dyn LedgerStore>,
@@ -46,8 +31,6 @@ pub struct MinerActor {
 }
 
 impl MinerActor {
-    /// Create a new MinerActor instance. Does not start it -- use `Actor::spawn`
-    /// or `Actor::spawn_linked` (via the supervisor) to run.
     pub fn new(
         store: Arc<dyn LedgerStore>,
         config: &ServerConfig,
@@ -59,37 +42,14 @@ impl MinerActor {
             mining_config: mining_config.clone(),
         }
     }
-
-    pub async fn start(
-        store: Arc<dyn LedgerStore>,
-        config: &ServerConfig,
-        mining_config: &MiningConfig,
-    ) -> anyhow::Result<MinerHandle> {
-        let (actor_ref, _) = Actor::spawn(
-            Some("miner".to_string()),
-            Self::new(store.clone(), config, mining_config),
-            store,
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to start miner actor: {}", e))?;
-
-        Ok(MinerHandle { actor: actor_ref })
-    }
 }
 
-// ractor has blanket impl: impl<T: Any + Send + 'static> Message for T
-
-#[async_trait::async_trait]
-impl Actor for MinerActor {
-    type Msg = MinerMsg;
-    type State = MinerState;
-    type Arguments = Arc<dyn LedgerStore>;
-
+#[gen_server(state = MinerState, args = Arc<dyn LedgerStore>)]
+impl MinerActor {
     async fn pre_start(
         &self,
-        _myself: ActorRef<Self::Msg>,
-        store: Self::Arguments,
-    ) -> Result<Self::State, ActorProcessingErr> {
+        store: Arc<dyn LedgerStore>,
+    ) -> Result<MinerState, ActorProcessingErr> {
         let mining_state = match store
             .get_mining_state()
             .await
@@ -109,33 +69,23 @@ impl Actor for MinerActor {
                 initial
             }
         };
-
         Ok(MinerState { mining_state })
     }
 
-    async fn handle(
+    async fn get_target(&self, state: &mut MinerState) -> anyhow::Result<TargetInfo> {
+        Ok(state.mining_state.to_target_info())
+    }
+
+    async fn submit_mining_report(
         &self,
-        _myself: ActorRef<Self::Msg>,
-        msg: Self::Msg,
-        state: &mut Self::State,
-    ) -> Result<(), ActorProcessingErr> {
-        match msg {
-            MinerMsg::GetTarget { reply } => {
-                let target = state.mining_state.to_target_info();
-                let _ = reply.send(Ok(target));
-            }
-            MinerMsg::SubmitMiningReport {
-                preimage_str,
-                reply,
-            } => {
-                let result = self.handle_mining_report(&preimage_str, state).await;
-                let _ = reply.send(result);
-            }
-        }
-        Ok(())
+        state: &mut MinerState,
+        preimage_str: String,
+    ) -> anyhow::Result<MiningReportResult> {
+        self.handle_mining_report(&preimage_str, state).await
     }
 }
 
+/// Business logic — pure validation + immutable state transitions.
 impl MinerActor {
     async fn handle_mining_report(
         &self,
@@ -156,7 +106,7 @@ impl MinerActor {
             );
         }
 
-        // 4. Validate timestamp: not too far in the future, not zero
+        // 4. Validate timestamp: not in the future, not in the past
         let now_secs = chrono::Utc::now().timestamp() as u64;
         if preimage.timestamp == 0 {
             anyhow::bail!("preimage timestamp must not be zero");
@@ -164,6 +114,13 @@ impl MinerActor {
         if preimage.timestamp > now_secs + MAX_TIMESTAMP_DRIFT_SECS {
             anyhow::bail!(
                 "preimage timestamp {} is too far in the future (server time: {})",
+                preimage.timestamp,
+                now_secs
+            );
+        }
+        if preimage.timestamp < now_secs.saturating_sub(MIN_TIMESTAMP_AGE_SECS) {
+            anyhow::bail!(
+                "preimage timestamp {} is too far in the past (server time: {})",
                 preimage.timestamp,
                 now_secs
             );
@@ -176,11 +133,12 @@ impl MinerActor {
 
         // ─── PHASE A: VALIDATE EVERYTHING (no writes) ───────────────────
 
-        // 6. Parse and validate all webcash outputs — total must equal mining_amount
         let now = chrono::Utc::now();
 
         // 6. Parse and validate webcash outputs — total must equal mining_amount
-        let webcash_records: Vec<TokenRecord> = preimage.webcash.iter()
+        let webcash_records: Vec<TokenRecord> = preimage
+            .webcash
+            .iter()
             .map(|wc_str| {
                 let secret = SecretWebcash::from_str(wc_str)
                     .map_err(|e| anyhow::anyhow!("invalid webcash in preimage: {}", e))?;
@@ -206,7 +164,9 @@ impl MinerActor {
         }
 
         // 7. Parse and validate subsidy outputs
-        let subsidy_records: Vec<TokenRecord> = preimage.subsidy.iter()
+        let subsidy_records: Vec<TokenRecord> = preimage
+            .subsidy
+            .iter()
             .map(|sub_str| {
                 let secret = SecretWebcash::from_str(sub_str)
                     .map_err(|e| anyhow::anyhow!("invalid subsidy in preimage: {}", e))?;
@@ -231,8 +191,15 @@ impl MinerActor {
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
-        let mut token_records: Vec<TokenRecord> = webcash_records.into_iter()
+        // Deduplicate by public hash — first occurrence wins.
+        // BTreeMap::collect keeps last, so we reverse to keep first, then extract values.
+        let token_records: Vec<TokenRecord> = webcash_records
+            .into_iter()
             .chain(subsidy_records)
+            .rev()
+            .map(|r| (r.public_hash.clone(), r))
+            .collect::<BTreeMap<_, _>>()
+            .into_values()
             .collect();
 
         // 8. Compute new mining state with checked arithmetic (no writes yet)
@@ -256,41 +223,50 @@ impl MinerActor {
 
         // ─── PHASE B: WRITE ALL (validation passed) ─────────────────────
         // Write mining state FIRST (authoritative), then tokens.
-        // If state update succeeds but token insert fails, the token hash
-        // is unique — retrying with a different secret will succeed.
-        // Circulation is always accurate.
 
-        let mut new_state = state.mining_state.clone();
-        new_state.mining_reports_count += 1;
-        new_state.total_circulation_wats = new_circulation;
-        new_state.aggregate_work += 2f64.powi(difficulty as i32);
-
-        // 9. Difficulty adjustment (production mode only — testnet stays constant)
-        if self.mode == NetworkMode::Production
-            && new_state.mining_reports_count % self.mining_config.reports_per_epoch == 0
+        // 9. Compute new state as immutable transition (no field mutation)
+        let next_count = state.mining_state.mining_reports_count + 1;
+        let (new_difficulty, new_epoch, new_adj_time) = if self.mode == NetworkMode::Production
+            && next_count % self.mining_config.reports_per_epoch == 0
         {
-            let elapsed = (chrono::Utc::now() - new_state.last_adjustment_at)
+            let elapsed = (chrono::Utc::now() - state.mining_state.last_adjustment_at)
                 .num_seconds()
                 .unsigned_abs();
-            new_state.difficulty_target_bits = adjust_difficulty(
-                new_state.difficulty_target_bits,
-                elapsed,
-                self.mining_config.target_epoch_seconds,
-                self.mining_config.reports_per_epoch,
-                self.mining_config.reports_per_epoch,
-            );
-            new_state.epoch += 1;
-            new_state.last_adjustment_at = chrono::Utc::now();
-        }
+            (
+                adjust_difficulty(
+                    state.mining_state.difficulty_target_bits,
+                    elapsed,
+                    self.mining_config.target_epoch_seconds,
+                    self.mining_config.reports_per_epoch,
+                    self.mining_config.reports_per_epoch,
+                ),
+                state.mining_state.epoch + 1,
+                chrono::Utc::now(),
+            )
+        } else {
+            (
+                state.mining_state.difficulty_target_bits,
+                state.mining_state.epoch,
+                state.mining_state.last_adjustment_at,
+            )
+        };
+
+        let new_state = MiningState {
+            mining_reports_count: next_count,
+            total_circulation_wats: new_circulation,
+            aggregate_work: state.mining_state.aggregate_work + 2f64.powi(difficulty as i32),
+            difficulty_target_bits: new_difficulty,
+            epoch: new_epoch,
+            last_adjustment_at: new_adj_time,
+            ..state.mining_state.clone()
+        };
 
         // 10. Persist mining state first (source of truth for circulation)
         self.store.update_mining_state(&new_state).await?;
 
-        // 11. Insert all token records (deduplicate — C++ format duplicates subsidy)
-        token_records.dedup_by_key(|r| r.public_hash.clone());
-        futures::future::try_join_all(
-            token_records.iter().map(|r| self.store.insert_token(r))
-        ).await?;
+        // 11. Insert all token records (already deduplicated in Phase A)
+        futures::future::try_join_all(token_records.iter().map(|r| self.store.insert_token(r)))
+            .await?;
 
         // Commit in-memory state only after all writes succeed
         state.mining_state = new_state;
@@ -298,34 +274,5 @@ impl MinerActor {
         Ok(MiningReportResult {
             difficulty_target: state.mining_state.difficulty_target_bits,
         })
-    }
-}
-
-impl MinerHandle {
-    /// Construct a handle from a raw actor ref. Used by the supervisor.
-    pub fn from_ref(actor: ActorRef<MinerMsg>) -> Self {
-        Self { actor }
-    }
-
-    pub async fn get_target(&self) -> anyhow::Result<TargetInfo> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.actor
-            .cast(MinerMsg::GetTarget { reply: tx })
-            .map_err(|e| anyhow::anyhow!("actor send failed: {}", e))?;
-        rx.await?
-    }
-
-    pub async fn submit_mining_report(
-        &self,
-        preimage: String,
-    ) -> anyhow::Result<MiningReportResult> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.actor
-            .cast(MinerMsg::SubmitMiningReport {
-                preimage_str: preimage,
-                reply: tx,
-            })
-            .map_err(|e| anyhow::anyhow!("actor send failed: {}", e))?;
-        rx.await?
     }
 }

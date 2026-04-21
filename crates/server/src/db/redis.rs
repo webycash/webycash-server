@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use redis::AsyncCommands;
 
-use super::{BurnRecord, EconomyStats, LedgerStore, ReplacementRecord, TokenRecord};
+use super::{BurnRecord, LedgerStore, ReplacementRecord, TokenRecord};
 use crate::protocol::mining::MiningState;
 
 pub struct RedisStore {
@@ -179,29 +179,31 @@ impl LedgerStore for RedisStore {
         let audit_key = format!("{}replace:{}", Self::AUDIT_PREFIX, record.id);
         let audit_json = serde_json::to_string(record)?;
 
-        // Build EVAL command
+        // Pre-serialize output records
+        let output_jsons: Vec<String> = outputs
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<serde_json::Result<Vec<_>>>()?;
+
+        // Build EVAL command with chained iterators
         let mut cmd = redis::cmd("EVAL");
         cmd.arg(ATOMIC_REPLACE_LUA).arg(num_keys);
 
-        // Keys: inputs first, then outputs
-        for k in &input_keys {
+        // Keys: inputs then outputs (single chain)
+        input_keys.iter().chain(output_keys.iter()).for_each(|k| {
             cmd.arg(k);
-        }
-        for k in &output_keys {
-            cmd.arg(k);
-        }
+        });
 
         // ARGV: [num_inputs, num_outputs, now, audit_key, audit_json, output_jsons...]
-        cmd.arg(inputs.len().to_string());
-        cmd.arg(outputs.len().to_string());
-        cmd.arg(&now);
-        cmd.arg(&audit_key);
-        cmd.arg(&audit_json);
+        cmd.arg(inputs.len().to_string())
+            .arg(outputs.len().to_string())
+            .arg(&now)
+            .arg(&audit_key)
+            .arg(&audit_json);
 
-        for output in outputs {
-            let json = serde_json::to_string(output)?;
-            cmd.arg(json);
-        }
+        output_jsons.iter().for_each(|j| {
+            cmd.arg(j);
+        });
 
         let result: String = cmd
             .query_async(&mut conn)
@@ -254,42 +256,28 @@ impl LedgerStore for RedisStore {
 
     async fn check_tokens(&self, hashes: &[String]) -> anyhow::Result<Vec<(String, Option<bool>)>> {
         let mut conn = self.pool.clone();
-        let mut results = Vec::with_capacity(hashes.len());
-        for hash in hashes {
-            let key = Self::token_key(hash);
-            let json: Option<String> = conn.get(&key).await?;
-            let status = match json {
-                Some(j) => Some(
+
+        // Pipeline: N sequential round-trips → 1 pipelined round-trip
+        let keys: Vec<String> = hashes.iter().map(|h| Self::token_key(h)).collect();
+        let mut pipe = redis::pipe();
+        keys.iter().for_each(|k| {
+            pipe.cmd("GET").arg(k);
+        });
+        let values: Vec<Option<String>> = pipe.query_async(&mut conn).await?;
+
+        Ok(hashes
+            .iter()
+            .zip(values)
+            .map(|(hash, json_opt)| {
+                let status = json_opt.and_then(|j| {
                     serde_json::from_str::<TokenRecord>(&j)
                         .map(|r| r.spent)
-                        .unwrap_or(false),
-                ),
-                None => None,
-            };
-            results.push((hash.clone(), status));
-        }
-        Ok(results)
+                        .ok()
+                });
+                (hash.clone(), status)
+            })
+            .collect())
     }
 
-    async fn get_stats(&self) -> anyhow::Result<EconomyStats> {
-        let state = self.get_mining_state().await?;
-        match state {
-            Some(s) => Ok(EconomyStats {
-                total_circulation_wats: s.total_circulation_wats,
-                mining_reports_count: s.mining_reports_count,
-                difficulty_target_bits: s.difficulty_target_bits,
-                epoch: s.epoch,
-                mining_amount_wats: s.mining_amount_wats,
-                subsidy_amount_wats: s.subsidy_amount_wats,
-            }),
-            None => Ok(EconomyStats {
-                total_circulation_wats: 0,
-                mining_reports_count: 0,
-                difficulty_target_bits: 0,
-                epoch: 0,
-                mining_amount_wats: 0,
-                subsidy_amount_wats: 0,
-            }),
-        }
-    }
+    // get_stats: uses default trait method (derived from mining state)
 }

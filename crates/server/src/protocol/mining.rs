@@ -9,9 +9,13 @@ fn deserialize_timestamp<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u
     let value = serde_json::Value::deserialize(deserializer)?;
     match value {
         serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_u64() { Ok(i) }
-            else if let Some(f) = n.as_f64() { Ok(f as u64) }
-            else { Err(serde::de::Error::custom("timestamp must be a number")) }
+            if let Some(i) = n.as_u64() {
+                Ok(i)
+            } else if let Some(f) = n.as_f64() {
+                Ok(f as u64)
+            } else {
+                Err(serde::de::Error::custom("timestamp must be a number"))
+            }
         }
         _ => Err(serde::de::Error::custom("timestamp must be a number")),
     }
@@ -19,16 +23,10 @@ fn deserialize_timestamp<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u
 
 /// Count leading zero bits in a 32-byte SHA256 hash.
 pub fn leading_zero_bits(hash: &[u8]) -> u32 {
-    let mut count = 0u32;
-    for byte in hash {
-        if *byte == 0 {
-            count += 8;
-        } else {
-            count += byte.leading_zeros();
-            break;
-        }
-    }
-    count
+    let full_zero_bytes = hash.iter().take_while(|&&b| b == 0).count() as u32;
+    hash.get(full_zero_bytes as usize)
+        .map_or(0, |b| b.leading_zeros())
+        + full_zero_bytes * 8
 }
 
 /// Verify that SHA256(preimage) has at least `difficulty_bits` leading zero bits.

@@ -50,7 +50,7 @@ pub struct BurnRecord {
 }
 
 /// Economy statistics.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EconomyStats {
     pub total_circulation_wats: i64,
     pub mining_reports_count: u64,
@@ -95,8 +95,21 @@ pub trait LedgerStore: Send + Sync + 'static {
     /// Returns (hash, Option<bool>): None = not found, Some(true) = spent, Some(false) = unspent.
     async fn check_tokens(&self, hashes: &[String]) -> anyhow::Result<Vec<(String, Option<bool>)>>;
 
-    /// Get economy statistics.
-    async fn get_stats(&self) -> anyhow::Result<EconomyStats>;
+    /// Get economy statistics. Default: derived from mining state.
+    async fn get_stats(&self) -> anyhow::Result<EconomyStats> {
+        Ok(self
+            .get_mining_state()
+            .await?
+            .map(|s| EconomyStats {
+                total_circulation_wats: s.total_circulation_wats,
+                mining_reports_count: s.mining_reports_count,
+                difficulty_target_bits: s.difficulty_target_bits,
+                epoch: s.epoch,
+                mining_amount_wats: s.mining_amount_wats,
+                subsidy_amount_wats: s.subsidy_amount_wats,
+            })
+            .unwrap_or_default())
+    }
 }
 
 /// Blanket impl so Box<dyn LedgerStore> satisfies LedgerStore.
@@ -131,9 +144,7 @@ impl LedgerStore for Box<dyn LedgerStore> {
     async fn check_tokens(&self, hashes: &[String]) -> anyhow::Result<Vec<(String, Option<bool>)>> {
         (**self).check_tokens(hashes).await
     }
-    async fn get_stats(&self) -> anyhow::Result<EconomyStats> {
-        (**self).get_stats().await
-    }
+    // get_stats: uses default trait method
 }
 
 /// Create a LedgerStore from config.

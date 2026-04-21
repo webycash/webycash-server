@@ -2,7 +2,7 @@ use async_trait::async_trait;
 
 use super::foundationdb::FdbStore;
 use super::redis::RedisStore;
-use super::{BurnRecord, EconomyStats, LedgerStore, ReplacementRecord, TokenRecord};
+use super::{BurnRecord, LedgerStore, ReplacementRecord, TokenRecord};
 use crate::protocol::mining::MiningState;
 
 /// Composite store: FoundationDB as the source of truth, Redis as a write-through cache.
@@ -179,38 +179,34 @@ impl LedgerStore for RedisFdbStore {
         // Try Redis first for the batch
         match self.redis.check_tokens(hashes).await {
             Ok(results) => {
-                // If all tokens were found in Redis, return directly
                 let all_found = results.iter().all(|(_, status)| status.is_some());
                 if all_found {
                     return Ok(results);
                 }
 
-                // Some misses: collect which hashes need FDB lookup
-                let mut final_results = Vec::with_capacity(hashes.len());
-                let mut missing: Vec<String> = Vec::new();
-
-                for (hash, status) in &results {
-                    if status.is_none() {
-                        missing.push(hash.clone());
-                    }
-                }
+                // Collect missing hashes via iterator filter
+                let missing: Vec<String> = results
+                    .iter()
+                    .filter(|(_, status)| status.is_none())
+                    .map(|(hash, _)| hash.clone())
+                    .collect();
 
                 // Fetch missing from FDB
-                let fdb_results = self.fdb.check_tokens(&missing).await?;
-                let mut fdb_map: std::collections::HashMap<String, Option<bool>> =
-                    fdb_results.into_iter().collect();
+                let fdb_map: std::collections::HashMap<String, Option<bool>> =
+                    self.fdb.check_tokens(&missing).await?.into_iter().collect();
 
-                // Merge results preserving original order
-                for (hash, status) in results {
-                    if status.is_some() {
-                        final_results.push((hash, status));
-                    } else {
-                        let fdb_status = fdb_map.remove(&hash).flatten();
-                        final_results.push((hash, fdb_status));
-                    }
-                }
-
-                Ok(final_results)
+                // Merge results preserving original order via iterator map
+                Ok(results
+                    .into_iter()
+                    .map(|(hash, status)| {
+                        if status.is_some() {
+                            (hash, status)
+                        } else {
+                            let fdb_status = fdb_map.get(&hash).copied().flatten();
+                            (hash, fdb_status)
+                        }
+                    })
+                    .collect())
             }
             Err(e) => {
                 tracing::warn!(
@@ -219,29 +215,6 @@ impl LedgerStore for RedisFdbStore {
                 );
                 self.fdb.check_tokens(hashes).await
             }
-        }
-    }
-
-    async fn get_stats(&self) -> anyhow::Result<EconomyStats> {
-        // Stats derived from mining state, use same cache-through pattern
-        let state = self.get_mining_state().await?;
-        match state {
-            Some(s) => Ok(EconomyStats {
-                total_circulation_wats: s.total_circulation_wats,
-                mining_reports_count: s.mining_reports_count,
-                difficulty_target_bits: s.difficulty_target_bits,
-                epoch: s.epoch,
-                mining_amount_wats: s.mining_amount_wats,
-                subsidy_amount_wats: s.subsidy_amount_wats,
-            }),
-            None => Ok(EconomyStats {
-                total_circulation_wats: 0,
-                mining_reports_count: 0,
-                difficulty_target_bits: 0,
-                epoch: 0,
-                mining_amount_wats: 0,
-                subsidy_amount_wats: 0,
-            }),
         }
     }
 }

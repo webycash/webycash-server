@@ -18,6 +18,8 @@ path = "src/lib.rs"
 [features]
 default = []
 fdb = ["foundationdb"]
+cuda = ["cudarc"]
+wgpu-compute = ["wgpu", "pollster"]
 
 [dependencies]
 hyper.workspace = true
@@ -40,6 +42,10 @@ aws-sdk-dynamodb.workspace = true
 serde_dynamo.workspace = true
 redis.workspace = true
 foundationdb = { workspace = true, optional = true }
+cudarc = { version = "0.16", optional = true }
+wgpu = { version = "24", optional = true }
+pollster = { version = "0.4", optional = true }
+bytemuck = { version = "1", features = ["derive"] }
 thiserror.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
@@ -48,7 +54,17 @@ toml.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 rand.workspace = true
+tokio-stream.workspace = true
 webycash-macros = { path = "../macros" }
 
 [dev-dependencies]
 tokio-test = "0.4"
+criterion = { version = "0.5", features = ["async_tokio"] }
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[[bench]]
+name = "compute"
+harness = false

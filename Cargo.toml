@@ -67,3 +67,4 @@ proc-macro2 = "1"
 # Misc
 uuid = { version = "1", features = ["v4", "serde"] }
 rand = "0.8"
+tokio-stream = "0.1"

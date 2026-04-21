@@ -1,80 +1,102 @@
-//! Replace operation expressed as a Free Monad effect program.
+//! Replace operation: pure validation + single atomic DB call.
 //!
-//! The replace logic is described as composable effects, then interpreted
-//! against a real or mock database. This enables pure-functional testing:
-//! create a mock interpreter that feeds predetermined values.
+//! The replace logic separates pure computation (parsing, amount conservation)
+//! from the single atomic database operation. All backends (Redis Lua, DynamoDB
+//! TransactWriteItems, FDB transactions) validate inputs exist and are unspent
+//! atomically — so we skip redundant pre-validation and go straight to
+//! atomic_replace in ONE round-trip.
 
 use std::str::FromStr;
 
-use super::{atomic_replace, get_token, LedgerEffect};
-use crate::db::{ReplacementRecord, TokenOrigin, TokenRecord};
+use chrono::{DateTime, Utc};
+
+use crate::db::{LedgerStore, ReplacementRecord, TokenOrigin, TokenRecord};
 use crate::protocol::{Amount, SecretWebcash};
 
-/// Build a replace effect program from input and output webcash strings.
-/// Returns a LedgerEffect that, when interpreted, validates all inputs
-/// and performs the atomic replace.
-pub fn build_replace_effect(
+/// Parse and validate input webcash strings. Pure computation, no IO.
+fn parse_inputs(webcashes: &[String]) -> Result<(Vec<String>, Amount), String> {
+    webcashes.iter().try_fold(
+        (Vec::with_capacity(webcashes.len()), Amount::ZERO),
+        |(mut hashes, total), wc_str| {
+            let secret = SecretWebcash::from_str(wc_str)
+                .map_err(|e| format!("invalid input webcash: {e}"))?;
+            if !secret.amount.is_positive() {
+                return Err("input amount must be positive".into());
+            }
+            let new_total = total
+                .checked_add(secret.amount)
+                .ok_or_else(|| "input amount overflow".to_string())?;
+            hashes.push(secret.to_public().hash);
+            Ok((hashes, new_total))
+        },
+    )
+}
+
+/// Parse and validate output webcash strings. Pure computation, no IO.
+fn parse_outputs(
+    new_webcashes: &[String],
+    now: DateTime<Utc>,
+) -> Result<(Vec<TokenRecord>, Amount), String> {
+    new_webcashes.iter().try_fold(
+        (Vec::with_capacity(new_webcashes.len()), Amount::ZERO),
+        |(mut records, total), wc_str| {
+            let secret = SecretWebcash::from_str(wc_str)
+                .map_err(|e| format!("invalid output webcash: {e}"))?;
+            if !secret.amount.is_positive() {
+                return Err("output amount must be positive".into());
+            }
+            let new_total = total
+                .checked_add(secret.amount)
+                .ok_or_else(|| "output amount overflow".to_string())?;
+            let public = secret.to_public();
+            records.push(TokenRecord {
+                public_hash: public.hash,
+                amount_wats: secret.amount.wats,
+                spent: false,
+                created_at: now,
+                spent_at: None,
+                origin: TokenOrigin::Replaced,
+            });
+            Ok((records, new_total))
+        },
+    )
+}
+
+/// Execute a replace operation: pure validation then ONE atomic DB call.
+///
+/// Phase 1 (pure, zero IO): parse tokens, validate amounts, conservation check.
+/// Phase 2 (single RTT): atomic_replace validates inputs exist + unspent,
+///   marks spent, inserts outputs, writes audit — all in one transaction.
+///
+/// This is N+1 → 1 round-trip optimization. The backends already enforce
+/// input existence and double-spend prevention atomically:
+/// - Redis: Lua script checks all inputs before any mutation
+/// - DynamoDB: TransactWriteItems with condition expressions
+/// - FDB: serializable transaction isolation
+pub async fn execute_replace(
+    store: &dyn LedgerStore,
     webcashes: Vec<String>,
     new_webcashes: Vec<String>,
-) -> LedgerEffect<()> {
-    // Parse inputs (pure computation, no effects needed)
-    let mut input_hashes = Vec::with_capacity(webcashes.len());
-    let mut input_total = Amount::ZERO;
+) -> anyhow::Result<()> {
+    // Phase 1: Pure computation — parse, validate, conservation check
+    let (input_hashes, input_total) =
+        parse_inputs(&webcashes).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    for wc_str in &webcashes {
-        let secret = match SecretWebcash::from_str(wc_str) {
-            Ok(s) => s,
-            Err(e) => return LedgerEffect::fail(format!("invalid input webcash: {}", e)),
-        };
-        if !secret.amount.is_positive() {
-            return LedgerEffect::fail("input amount must be positive");
-        }
-        match input_total.checked_add(secret.amount) {
-            Some(t) => input_total = t,
-            None => return LedgerEffect::fail("input amount overflow"),
-        }
-        input_hashes.push(secret.to_public().hash);
-    }
-
-    let mut output_records = Vec::with_capacity(new_webcashes.len());
-    let mut output_total = Amount::ZERO;
     let now = chrono::Utc::now();
+    let (output_records, output_total) =
+        parse_outputs(&new_webcashes, now).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    for wc_str in &new_webcashes {
-        let secret = match SecretWebcash::from_str(wc_str) {
-            Ok(s) => s,
-            Err(e) => return LedgerEffect::fail(format!("invalid output webcash: {}", e)),
-        };
-        if !secret.amount.is_positive() {
-            return LedgerEffect::fail("output amount must be positive");
-        }
-        match output_total.checked_add(secret.amount) {
-            Some(t) => output_total = t,
-            None => return LedgerEffect::fail("output amount overflow"),
-        }
-        let public = secret.to_public();
-        output_records.push(TokenRecord {
-            public_hash: public.hash,
-            amount_wats: secret.amount.wats,
-            spent: false,
-            created_at: now,
-            spent_at: None,
-            origin: TokenOrigin::Replaced,
-        });
-    }
-
-    // Amount conservation check
     if input_total != output_total {
-        return LedgerEffect::fail(format!(
+        anyhow::bail!(
             "amount mismatch: inputs={} outputs={}",
-            input_total, output_total
-        ));
+            input_total,
+            output_total
+        );
     }
     if !input_total.is_positive() {
-        return LedgerEffect::fail("replacement must have positive amount");
+        anyhow::bail!("replacement must have positive amount");
     }
 
-    // Build validation chain: verify each input exists and is unspent
     let output_hashes: Vec<String> = output_records
         .iter()
         .map(|r| r.public_hash.clone())
@@ -87,49 +109,8 @@ pub fn build_replace_effect(
         created_at: now,
     };
 
-    // Chain: validate each input via GetToken, then AtomicReplace
-    build_validation_chain(
-        input_hashes.clone(),
-        0,
-        input_hashes,
-        output_records,
-        record,
-    )
-}
-
-/// Recursively build a chain of GetToken effects to validate each input,
-/// followed by the AtomicReplace effect.
-fn build_validation_chain(
-    hashes_to_check: Vec<String>,
-    idx: usize,
-    all_input_hashes: Vec<String>,
-    output_records: Vec<TokenRecord>,
-    record: ReplacementRecord,
-) -> LedgerEffect<()> {
-    if idx >= hashes_to_check.len() {
-        // All inputs validated — perform the atomic replace
-        return atomic_replace(all_input_hashes, output_records, record);
-    }
-
-    let hash = hashes_to_check[idx].clone();
-    let remaining_hashes = hashes_to_check;
-
-    get_token(hash.clone()).bind(move |token_opt| {
-        match token_opt {
-            None => LedgerEffect::fail(format!("input token not found: {}", hash)),
-            Some(t) if t.spent => {
-                LedgerEffect::fail(format!("input token already spent: {}", hash))
-            }
-            Some(_) => {
-                // This input is valid; check next
-                build_validation_chain(
-                    remaining_hashes,
-                    idx + 1,
-                    all_input_hashes,
-                    output_records,
-                    record,
-                )
-            }
-        }
-    })
+    // Phase 2: Single atomic DB call — validates + mutates in one round-trip
+    store
+        .atomic_replace(&input_hashes, &output_records, &record)
+        .await
 }

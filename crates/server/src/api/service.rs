@@ -7,8 +7,7 @@ use hyper::{Request, Response};
 
 /// A composable service trait for request handling.
 ///
-/// Inspired by tower::Service but simplified for our use case:
-/// no poll_ready, no backpressure -- just async call.
+/// Inspired by tower::Service but simplified: no poll_ready, no backpressure.
 #[async_trait::async_trait]
 pub trait Service<Req: Send>: Send + Sync {
     type Response;
@@ -16,15 +15,56 @@ pub trait Service<Req: Send>: Send + Sync {
     async fn call(&self, req: Req) -> Result<Self::Response, Self::Error>;
 }
 
-/// Our standard HTTP request/response types.
+/// Standard HTTP request/response types.
 pub type HttpRequest = Request<Incoming>;
 pub type HttpResponse = Response<Full<Bytes>>;
 
 // ---------------------------------------------------------------------------
-// Middleware: Logged
+// Middleware: Cors — adds CORS headers to all responses
 // ---------------------------------------------------------------------------
 
-/// Wraps any service with tracing: logs the request path and response status.
+pub struct Cors<S> {
+    inner: S,
+    origin: String,
+}
+
+impl<S> Cors<S> {
+    pub fn new(inner: S, origin: String) -> Self {
+        Self { inner, origin }
+    }
+}
+
+#[async_trait::async_trait]
+impl<S> Service<HttpRequest> for Cors<S>
+where
+    S: Service<HttpRequest, Response = HttpResponse, Error = hyper::Error> + Send + Sync,
+{
+    type Response = HttpResponse;
+    type Error = hyper::Error;
+
+    async fn call(&self, req: HttpRequest) -> Result<Self::Response, Self::Error> {
+        let response = self.inner.call(req).await?;
+        // Direct header injection — no response rebuild, no header copying
+        let (mut parts, body) = response.into_parts();
+        parts
+            .headers
+            .insert("access-control-allow-origin", self.origin.parse().unwrap());
+        parts.headers.insert(
+            "access-control-allow-methods",
+            "GET, POST, OPTIONS".parse().unwrap(),
+        );
+        parts.headers.insert(
+            "access-control-allow-headers",
+            "content-type".parse().unwrap(),
+        );
+        Ok(Response::from_parts(parts, body))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Middleware: Logged — traces request/response
+// ---------------------------------------------------------------------------
+
 pub struct Logged<S> {
     inner: S,
     label: &'static str,
@@ -70,11 +110,9 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// Middleware: Timed
+// Middleware: Timed — measures request duration
 // ---------------------------------------------------------------------------
 
-/// Wraps any service with duration tracking. Emits a tracing event with
-/// the elapsed time for each request.
 pub struct Timed<S> {
     inner: S,
     label: &'static str,
@@ -98,12 +136,11 @@ where
         let start = std::time::Instant::now();
         let path = req.uri().path().to_string();
         let result = self.inner.call(req).await;
-        let elapsed = start.elapsed();
 
         tracing::info!(
             label = self.label,
             %path,
-            elapsed_ms = elapsed.as_millis() as u64,
+            elapsed_ms = start.elapsed().as_millis() as u64,
             "request completed"
         );
 
@@ -112,12 +149,11 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// Concrete handler service: wraps a handler fn into a Service impl.
+// HandlerService: wraps a handler fn into a Service
 // ---------------------------------------------------------------------------
 
 use super::AppState;
 
-/// A Service backed by a handler function.
 pub struct HandlerService<F> {
     state: Arc<AppState>,
     handler: F,

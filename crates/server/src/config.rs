@@ -12,6 +12,19 @@ pub struct ServerConfig {
     pub mode: NetworkMode,
     pub bind_addr: String,
     pub db: DbConfig,
+    /// CORS origin. Default: "*" (allow all). Set to specific origin in production.
+    #[serde(default)]
+    pub cors_origin: Option<String>,
+    /// HTTP/2 settings.
+    #[serde(default)]
+    pub h2: Option<H2Config>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct H2Config {
+    pub max_concurrent_streams: Option<u32>,
+    pub initial_window_size: Option<u32>,
+    pub max_frame_size: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -99,6 +112,8 @@ impl Config {
                     dynamodb_endpoint: std::env::var("DYNAMODB_ENDPOINT").ok(),
                     fdb_cluster_file: std::env::var("FDB_CLUSTER_FILE").ok(),
                 },
+                cors_origin: std::env::var("WEBCASH_CORS_ORIGIN").ok(),
+                h2: None,
             },
             mining: MiningConfig {
                 testnet_difficulty: difficulty,

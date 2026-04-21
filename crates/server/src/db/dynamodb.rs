@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use aws_sdk_dynamodb::types::AttributeValue;
 use aws_sdk_dynamodb::Client;
 
-use super::{BurnRecord, EconomyStats, LedgerStore, ReplacementRecord, TokenRecord};
+use super::{BurnRecord, LedgerStore, ReplacementRecord, TokenRecord};
 use crate::config::DbConfig;
 use crate::protocol::mining::MiningState;
 
@@ -19,11 +19,14 @@ pub struct DynamoDbStore {
 impl DynamoDbStore {
     pub async fn new(db_config: &DbConfig) -> anyhow::Result<Self> {
         let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-        let mut builder = aws_sdk_dynamodb::config::Builder::from(&aws_config);
+        let base_builder = aws_sdk_dynamodb::config::Builder::from(&aws_config);
 
-        if let Some(endpoint) = &db_config.dynamodb_endpoint {
-            builder = builder.endpoint_url(endpoint);
-        }
+        // Apply optional endpoint via functional chaining
+        let builder = db_config
+            .dynamodb_endpoint
+            .as_deref()
+            .map(|ep| base_builder.clone().endpoint_url(ep))
+            .unwrap_or(base_builder);
 
         let client = Client::from_conf(builder.build());
 
@@ -159,10 +162,13 @@ impl LedgerStore for DynamoDbStore {
         match token {
             None => Ok(false),
             Some(t) if t.spent => Ok(false),
-            Some(mut t) => {
-                t.spent = true;
-                t.spent_at = Some(chrono::Utc::now());
-                let json = serde_json::to_string(&t)?;
+            Some(t) => {
+                let spent_token = TokenRecord {
+                    spent: true,
+                    spent_at: Some(chrono::Utc::now()),
+                    ..t
+                };
+                let json = serde_json::to_string(&spent_token)?;
                 // Condition: token must still exist and not be spent (prevents TOCTOU race)
                 let result = self
                     .client
@@ -201,47 +207,54 @@ impl LedgerStore for DynamoDbStore {
         use aws_sdk_dynamodb::types::{Put, TransactWriteItem};
 
         let now = chrono::Utc::now();
-        let mut items = Vec::new();
 
-        // Mark inputs spent with condition expressions (prevents TOCTOU double-spend)
-        for hash in inputs {
-            let mut token = self
-                .get_token(hash)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("input token not found: {}", hash))?;
-            if token.spent {
-                anyhow::bail!("input token already spent: {}", hash);
-            }
-            token.spent = true;
-            token.spent_at = Some(now);
-            let json = serde_json::to_string(&token)?;
+        // Validate and build input transaction items (fetch + mark spent)
+        let input_items: Vec<TransactWriteItem> = futures::future::try_join_all(
+            inputs.iter().map(|hash| {
+                let hash = hash.clone();
+                async move {
+                    let token = self
+                        .get_token(&hash)
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("input token not found: {}", hash))?;
+                    if token.spent {
+                        anyhow::bail!("input token already spent: {}", hash);
+                    }
+                    let spent_token = TokenRecord {
+                        spent: true,
+                        spent_at: Some(now),
+                        ..token
+                    };
+                    let json = serde_json::to_string(&spent_token)?;
 
-            // Condition: token must exist AND not be spent at transaction time
-            // This prevents TOCTOU: if a concurrent request spends this token
-            // between our get_token() and this write, the transaction fails.
-            items.push(
-                TransactWriteItem::builder()
-                    .put(
-                        Put::builder()
-                            .table_name(self.tokens_table())
-                            .item("public_hash", AttributeValue::S(hash.clone()))
-                            .item("data", AttributeValue::S(json))
-                            .item("spent", AttributeValue::Bool(true))
-                            .condition_expression(
-                                "attribute_exists(public_hash) AND (attribute_not_exists(spent) OR spent = :false_val)",
-                            )
-                            .expression_attribute_values(":false_val", AttributeValue::Bool(false))
-                            .build()?,
-                    )
-                    .build(),
-            );
-        }
+                    // Condition: token must exist AND not be spent at transaction time
+                    // This prevents TOCTOU: if a concurrent request spends this token
+                    // between our get_token() and this write, the transaction fails.
+                    Ok(TransactWriteItem::builder()
+                        .put(
+                            Put::builder()
+                                .table_name(self.tokens_table())
+                                .item("public_hash", AttributeValue::S(hash))
+                                .item("data", AttributeValue::S(json))
+                                .item("spent", AttributeValue::Bool(true))
+                                .condition_expression(
+                                    "attribute_exists(public_hash) AND (attribute_not_exists(spent) OR spent = :false_val)",
+                                )
+                                .expression_attribute_values(":false_val", AttributeValue::Bool(false))
+                                .build()?,
+                        )
+                        .build())
+                }
+            }),
+        )
+        .await?;
 
-        // Insert outputs
-        for output in outputs {
-            let json = serde_json::to_string(output)?;
-            items.push(
-                TransactWriteItem::builder()
+        // Build output transaction items (pure transformation, no IO)
+        let output_items: Vec<TransactWriteItem> = outputs
+            .iter()
+            .map(|output| {
+                let json = serde_json::to_string(output)?;
+                Ok(TransactWriteItem::builder()
                     .put(
                         Put::builder()
                             .table_name(self.tokens_table())
@@ -250,28 +263,33 @@ impl LedgerStore for DynamoDbStore {
                             .condition_expression("attribute_not_exists(public_hash)")
                             .build()?,
                     )
-                    .build(),
-            );
-        }
+                    .build())
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
         // Audit record
         let audit_json = serde_json::to_string(record)?;
-        items.push(
-            TransactWriteItem::builder()
-                .put(
-                    Put::builder()
-                        .table_name(self.audit_table())
-                        .item("log_id", AttributeValue::S(record.id.clone()))
-                        .item(
-                            "created_at",
-                            AttributeValue::S(record.created_at.to_rfc3339()),
-                        )
-                        .item("action", AttributeValue::S("replace".to_string()))
-                        .item("data", AttributeValue::S(audit_json))
-                        .build()?,
-                )
-                .build(),
-        );
+        let audit_item = TransactWriteItem::builder()
+            .put(
+                Put::builder()
+                    .table_name(self.audit_table())
+                    .item("log_id", AttributeValue::S(record.id.clone()))
+                    .item(
+                        "created_at",
+                        AttributeValue::S(record.created_at.to_rfc3339()),
+                    )
+                    .item("action", AttributeValue::S("replace".to_string()))
+                    .item("data", AttributeValue::S(audit_json))
+                    .build()?,
+            )
+            .build();
+
+        // Compose all transaction items via iterator chain — no mutation
+        let items: Vec<TransactWriteItem> = input_items
+            .into_iter()
+            .chain(output_items)
+            .chain(std::iter::once(audit_item))
+            .collect();
 
         self.client
             .transact_write_items()
@@ -320,16 +338,19 @@ impl LedgerStore for DynamoDbStore {
         use aws_sdk_dynamodb::types::{Put, TransactWriteItem};
 
         // Atomic: mark spent + write audit in single transaction
-        let mut token = self
+        let token = self
             .get_token(public_hash)
             .await?
             .ok_or_else(|| anyhow::anyhow!("token not found: {}", public_hash))?;
         if token.spent {
             anyhow::bail!("token already spent: {}", public_hash);
         }
-        token.spent = true;
-        token.spent_at = Some(chrono::Utc::now());
-        let token_json = serde_json::to_string(&token)?;
+        let spent_token = TokenRecord {
+            spent: true,
+            spent_at: Some(chrono::Utc::now()),
+            ..token
+        };
+        let token_json = serde_json::to_string(&spent_token)?;
         let audit_json = serde_json::to_string(record)?;
 
         let items = vec![
@@ -376,33 +397,13 @@ impl LedgerStore for DynamoDbStore {
     }
 
     async fn check_tokens(&self, hashes: &[String]) -> anyhow::Result<Vec<(String, Option<bool>)>> {
-        let mut results = Vec::with_capacity(hashes.len());
-        for hash in hashes {
-            let token = self.get_token(hash).await?;
-            results.push((hash.clone(), token.map(|t| t.spent)));
-        }
-        Ok(results)
-    }
-
-    async fn get_stats(&self) -> anyhow::Result<EconomyStats> {
-        let state = self.get_mining_state().await?;
-        match state {
-            Some(s) => Ok(EconomyStats {
-                total_circulation_wats: s.total_circulation_wats,
-                mining_reports_count: s.mining_reports_count,
-                difficulty_target_bits: s.difficulty_target_bits,
-                epoch: s.epoch,
-                mining_amount_wats: s.mining_amount_wats,
-                subsidy_amount_wats: s.subsidy_amount_wats,
-            }),
-            None => Ok(EconomyStats {
-                total_circulation_wats: 0,
-                mining_reports_count: 0,
-                difficulty_target_bits: 0,
-                epoch: 0,
-                mining_amount_wats: 0,
-                subsidy_amount_wats: 0,
-            }),
-        }
+        futures::future::try_join_all(hashes.iter().map(|hash| {
+            let hash = hash.clone();
+            async move {
+                let token = self.get_token(&hash).await?;
+                Ok::<_, anyhow::Error>((hash, token.map(|t| t.spent)))
+            }
+        }))
+        .await
     }
 }

@@ -47,9 +47,8 @@ async fn main() -> anyhow::Result<()> {
     // Create database backend
     let store = db::create_store(&config).await?;
 
-    // Create and start server
-    let mut server = WebcashServer::new(store, config.server.clone(), config.mining.clone());
-    server.start().await?;
+    // Construct fully-initialized immutable server
+    let server = WebcashServer::start(store, config.server.clone(), config.mining.clone()).await?;
 
     let state = Arc::new(api::AppState {
         server,
@@ -61,18 +60,44 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, "listening");
 
+    // Build HTTP server with optional H2 tuning
+    let h2_config = config.server.h2.clone();
+
     loop {
         let (stream, peer) = listener.accept().await?;
         let state = state.clone();
+        let h2_config = h2_config.clone();
         tokio::spawn(async move {
             let service = hyper::service::service_fn(move |req: Request<Incoming>| {
                 let state = state.clone();
                 async move { api::router::route(state, req).await }
             });
-            if let Err(e) =
-                hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
-                    .serve_connection(TokioIo::new(stream), service)
-                    .await
+
+            let builder = {
+                let base = hyper_util::server::conn::auto::Builder::new(
+                    hyper_util::rt::TokioExecutor::new(),
+                );
+                match h2_config {
+                    Some(ref h2) => {
+                        let mut b = base;
+                        if let Some(max) = h2.max_concurrent_streams {
+                            b.http2().max_concurrent_streams(max);
+                        }
+                        if let Some(win) = h2.initial_window_size {
+                            b.http2().initial_stream_window_size(win);
+                        }
+                        if let Some(frame) = h2.max_frame_size {
+                            b.http2().max_frame_size(frame);
+                        }
+                        b
+                    }
+                    None => base,
+                }
+            };
+
+            if let Err(e) = builder
+                .serve_connection(TokioIo::new(stream), service)
+                .await
             {
                 tracing::error!(%peer, error = %e, "connection error");
             }

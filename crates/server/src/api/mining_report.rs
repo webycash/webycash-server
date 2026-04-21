@@ -7,7 +7,7 @@ use hyper::{Request, Response, StatusCode};
 use serde::Deserialize;
 
 use super::router::{bad_request, ok_json};
-use super::AppState;
+use super::{handler, validate, AppState, MAX_BODY_SIZE};
 
 #[derive(Deserialize)]
 struct MiningReportRequest {
@@ -20,65 +20,42 @@ struct Legalese {
     terms: bool,
 }
 
-/// Mining report handler. Supports two modes:
-/// - Normal: returns JSON `{"status":"success","difficulty_target":N}`
-/// - Streaming (Accept: text/event-stream): SSE events for each validation stage
-pub async fn handle(
-    state: Arc<AppState>,
-    req: Request<Incoming>,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    let body_bytes = req
-        .collect()
-        .await
-        .map_err(|_| ())
-        .unwrap_or_default()
-        .to_bytes();
-
-    let request: MiningReportRequest = match serde_json::from_slice(&body_bytes) {
-        Ok(r) => r,
-        Err(e) => return bad_request(&format!("invalid request: {}", e)),
-    };
-
-    if !request.legalese.terms {
-        return bad_request("terms must be accepted");
-    }
-
+// Normal mining report — returns JSON result.
+handler!(MiningReportRequest, |state, req| {
+    validate!(req.legalese.terms, "terms must be accepted");
     match state
         .server
         .miner()
-        .submit_mining_report(request.preimage)
+        .submit_mining_report(req.preimage)
         .await
     {
-        Ok(result) => {
-            let body = serde_json::json!({
+        Ok(result) => ok_json(
+            serde_json::json!({
                 "status": "success",
                 "difficulty_target": result.difficulty_target,
-            });
-            ok_json(body.to_string())
-        }
+            })
+            .to_string(),
+        ),
         Err(e) => bad_request(&e.to_string()),
     }
-}
+});
 
-/// Streaming mining report handler — returns SSE events for validation stages.
-/// Route: POST /api/v1/mining_report/stream
-///
-/// Events:
-///   data: {"event":"validating","stage":"pow"}
-///   data: {"event":"validating","stage":"preimage"}
-///   data: {"event":"accepted","difficulty_target":16}
-/// or:
-///   data: {"event":"rejected","error":"..."}
+/// Streaming mining report — returns SSE events.
 pub async fn handle_stream(
     state: Arc<AppState>,
     req: Request<Incoming>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    let body_bytes = req
+    let collected = http_body_util::Limited::new(req.into_body(), MAX_BODY_SIZE)
         .collect()
-        .await
-        .map_err(|_| ())
-        .unwrap_or_default()
-        .to_bytes();
+        .await;
+    let body_bytes = match collected {
+        Ok(c) => c.to_bytes(),
+        Err(_) => {
+            return sse_response(&[
+                r#"{"event":"rejected","error":"request body too large or invalid"}"#,
+            ])
+        }
+    };
 
     let request: MiningReportRequest = match serde_json::from_slice(&body_bytes) {
         Ok(r) => r,
@@ -94,14 +71,12 @@ pub async fn handle_stream(
         return sse_response(&[r#"{"event":"rejected","error":"terms not accepted"}"#]);
     }
 
-    // Validate and submit
-    let result = state
+    match state
         .server
         .miner()
         .submit_mining_report(request.preimage)
-        .await;
-
-    match result {
+        .await
+    {
         Ok(r) => sse_response(&[
             r#"{"event":"validating","stage":"pow"}"#,
             r#"{"event":"validating","stage":"preimage"}"#,
@@ -121,13 +96,13 @@ pub async fn handle_stream(
 fn sse_response(events: &[&str]) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let body: String = events
         .iter()
-        .map(|data| format!("data: {}\n\n", data))
+        .map(|data| format!("data: {data}\n\n"))
         .collect();
+    // CORS headers added by Cors middleware in dispatch stack
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header("content-type", "text/event-stream")
         .header("cache-control", "no-cache")
-        .header("access-control-allow-origin", "*")
         .body(Full::new(Bytes::from(body)))
         .unwrap())
 }
