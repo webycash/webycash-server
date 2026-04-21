@@ -1,5 +1,4 @@
 services:
-  # --- 3 Redis nodes ---
   redis-1: &redis
     image: redis:7-alpine
     command: >
@@ -19,7 +18,6 @@ services:
     <<: *redis
     networks: [bench]
 
-  # --- 3 webycash-server nodes (dev build inside Docker) ---
   server-1: &server
     build:
       context: .
@@ -44,7 +42,6 @@ services:
       WEBCASH_DIFFICULTY: "1"
       RUST_LOG: webycash_server=warn
     depends_on: [redis-2]
-    networks: [bench]
 
   server-3:
     <<: *server
@@ -56,19 +53,17 @@ services:
       WEBCASH_DIFFICULTY: "1"
       RUST_LOG: webycash_server=warn
     depends_on: [redis-3]
-    networks: [bench]
 
-  # --- Benchmark runner (inside Docker network) ---
+  # Rust benchmark runner — same image, different entrypoint
   bench:
-    image: python:3.12-alpine
-    depends_on: [server-1, server-2, server-3]
-    working_dir: /app
-    volumes:
-      - ./benches:/app
+    build:
+      context: .
+      dockerfile: Dockerfile.bench
+    entrypoint: ["bench_replace"]
     environment:
       SERVERS: http://server-1:8080,http://server-2:8080,http://server-3:8080
+    depends_on: [server-1, server-2, server-3]
     networks: [bench]
-    command: sh -c "pip install --quiet aiohttp && sleep 3 && python3 server_bench.py"
 
   # External access
   redis-ext:

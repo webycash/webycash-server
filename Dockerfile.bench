@@ -9,5 +9,6 @@ RUN cargo build --release -p webycash-server
 FROM alpine:3.21
 RUN apk add --no-cache libgcc
 COPY --from=build /app/target/release/webycash-server /usr/local/bin/
+COPY --from=build /app/target/release/bench_replace /usr/local/bin/
 EXPOSE 8080
 ENTRYPOINT ["webycash-server"]
