@@ -1,11 +1,40 @@
 services:
-  redis:
+  # 3-node Redis cluster for parallel sharded throughput
+  redis-1: &redis-base
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    command: redis-server --appendonly yes
-    volumes:
-      - redis-data:/data
+    ports: ["6379:6379"]
+    command: >
+      redis-server --port 6379
+      --io-threads 4 --io-threads-do-reads yes
+      --hz 100 --tcp-backlog 8192
+      --save "" --appendonly no
+      --maxclients 65536 --lua-time-limit 10000
+      --loglevel warning
+    volumes: [redis-data-1:/data]
+
+  redis-2:
+    <<: *redis-base
+    ports: ["6380:6379"]
+    command: >
+      redis-server --port 6379
+      --io-threads 4 --io-threads-do-reads yes
+      --hz 100 --tcp-backlog 8192
+      --save "" --appendonly no
+      --maxclients 65536 --lua-time-limit 10000
+      --loglevel warning
+    volumes: [redis-data-2:/data]
+
+  redis-3:
+    <<: *redis-base
+    ports: ["6381:6379"]
+    command: >
+      redis-server --port 6379
+      --io-threads 4 --io-threads-do-reads yes
+      --hz 100 --tcp-backlog 8192
+      --save "" --appendonly no
+      --maxclients 65536 --lua-time-limit 10000
+      --loglevel warning
+    volumes: [redis-data-3:/data]
 
   foundationdb:
     image: foundationdb/foundationdb:7.3.43
@@ -34,5 +63,7 @@ services:
     command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
 
 volumes:
-  redis-data:
+  redis-data-1:
+  redis-data-2:
+  redis-data-3:
   fdb-data:

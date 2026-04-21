@@ -41,8 +41,8 @@ impl<S: LedgerStore> WebcashServer<S> {
         let supervisor =
             actors::start_actors(store.clone(), &server_config, &mining_config).await?;
         let compute: Arc<dyn ComputeBackend> = Arc::from(compute::create_backend());
-        // Batch coalescing for replace operations — 10K buffer for high concurrency
-        let batcher = actors::batcher::spawn_batcher(store.clone(), 10_000);
+        // Batch coalescing for replace operations — high buffer for max throughput
+        let batcher = actors::batcher::spawn_batcher(store.clone(), 100_000);
         tracing::info!(compute = compute.name(), "server initialized");
         Ok(Self {
             server_config,
