@@ -1,7 +1,13 @@
+//! Redis backend — native HASH storage, Lua for atomicity, pipelined batches.
+//!
+//! Tokens: Redis HASHes `token:{hash}` with fields: amount_wats, spent, created_at, spent_at, origin
+//! Replace: Lua EVALSHA operates on HASH fields (no JSON encode/decode in Redis)
+//! Reads: native HGET/HGETALL pipelined (benefits from io-threads)
+
 use async_trait::async_trait;
 use redis::AsyncCommands;
 
-use super::{BurnRecord, LedgerStore, ReplaceOp, ReplaceResult, TokenRecord};
+use super::{BurnRecord, LedgerStore, ReplaceOp, ReplaceResult, TokenOrigin, TokenRecord};
 use crate::protocol::mining::MiningState;
 
 const POOL_SIZE: usize = 16;
@@ -13,16 +19,58 @@ pub struct RedisStore {
     burn_sha: String,
 }
 
+/// Lua: atomic replace on HASH-stored tokens. Returns "ok" or "ERR:reason".
+/// Operates directly on HASH fields — no JSON encoding in Redis.
+const REPLACE_LUA: &str = r#"
+local ni = tonumber(ARGV[1])
+local no = tonumber(ARGV[2])
+local now = ARGV[3]
+local audit_key = ARGV[4]
+local audit_json = ARGV[5]
+-- Validate inputs exist and unspent
+for i = 1, ni do
+    local k = KEYS[i]
+    if redis.call('EXISTS', k) == 0 then return 'ERR:input token not found: ' .. k end
+    if redis.call('HGET', k, 'spent') == '1' then return 'ERR:input token already spent: ' .. k end
+end
+-- Mark inputs spent
+for i = 1, ni do
+    redis.call('HSET', KEYS[i], 'spent', '1', 'spent_at', now)
+end
+-- Insert outputs (ARGV[6..] = amount_wats, created_at, origin for each output)
+for i = 1, no do
+    local k = KEYS[ni + i]
+    if redis.call('EXISTS', k) == 1 then return 'ERR:output token already exists: ' .. k end
+    local base = 5 + (i - 1) * 3
+    redis.call('HSET', k, 'amount_wats', ARGV[base + 1], 'spent', '0',
+               'created_at', ARGV[base + 2], 'origin', ARGV[base + 3])
+end
+redis.call('SET', audit_key, audit_json)
+return 'ok'
+"#;
+
+/// Lua: atomic burn on HASH-stored tokens.
+const BURN_LUA: &str = r#"
+local tk = KEYS[1]
+local ak = KEYS[2]
+local now = ARGV[1]
+local aj = ARGV[2]
+if redis.call('EXISTS', tk) == 0 then return 'ERR:token not found' end
+if redis.call('HGET', tk, 'spent') == '1' then return 'ERR:token already spent' end
+redis.call('HSET', tk, 'spent', '1', 'spent_at', now)
+redis.call('SET', ak, aj)
+return 'ok'
+"#;
+
 impl RedisStore {
     pub async fn new(url: &str) -> anyhow::Result<Self> {
         let client = redis::Client::open(url)?;
-
         let conns = futures::future::try_join_all(
             (0..POOL_SIZE).map(|_| redis::aio::ConnectionManager::new(client.clone())),
         )
         .await?;
 
-        let replace_sha = redis::Script::new(ATOMIC_REPLACE_LUA)
+        let replace_sha = redis::Script::new(REPLACE_LUA)
             .prepare_invoke()
             .load_async(&mut conns[0].clone())
             .await?;
@@ -31,12 +79,7 @@ impl RedisStore {
             .load_async(&mut conns[0].clone())
             .await?;
 
-        tracing::info!(
-            pool = POOL_SIZE,
-            replace_sha = %replace_sha,
-            "Redis: {POOL_SIZE} connections, EVALSHA pipelined"
-        );
-
+        tracing::info!(pool = POOL_SIZE, "Redis: HASH storage, EVALSHA atomicity");
         Ok(Self {
             conns,
             conn_idx: std::sync::atomic::AtomicUsize::new(0),
@@ -53,75 +96,34 @@ impl RedisStore {
         self.conns[idx].clone()
     }
 
-    fn token_key(hash: &str) -> String {
+    fn key(hash: &str) -> String {
         format!("token:{hash}")
     }
 
-    const MINING_STATE_KEY: &'static str = "mining:state";
-    const AUDIT_PREFIX: &'static str = "audit:";
+    fn hash_to_token(
+        hash: &str,
+        fields: &std::collections::HashMap<String, String>,
+    ) -> Option<TokenRecord> {
+        Some(TokenRecord {
+            public_hash: hash.to_string(),
+            amount_wats: fields.get("amount_wats")?.parse().ok()?,
+            spent: fields.get("spent").map(|s| s == "1").unwrap_or(false),
+            created_at: fields
+                .get("created_at")
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|d| d.with_timezone(&chrono::Utc))
+                .unwrap_or_else(chrono::Utc::now),
+            spent_at: fields
+                .get("spent_at")
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|d| d.with_timezone(&chrono::Utc)),
+            origin: match fields.get("origin").map(|s| s.as_str()) {
+                Some("replaced") => TokenOrigin::Replaced,
+                _ => TokenOrigin::Mined,
+            },
+        })
+    }
 }
-
-/// Lua: atomic replace. Returns "ok" or "ERR:reason" (string, not error_reply).
-/// Using string returns instead of redis.error_reply() allows pipelining
-/// multiple EVALSHA calls without aborting the pipeline on first failure.
-const ATOMIC_REPLACE_LUA: &str = r#"
-local num_inputs = tonumber(ARGV[1])
-local num_outputs = tonumber(ARGV[2])
-local now = ARGV[3]
-local audit_key = ARGV[4]
-local audit_json = ARGV[5]
-for i = 1, num_inputs do
-    local key = KEYS[i]
-    local json = redis.call('GET', key)
-    if not json then
-        return 'ERR:input token not found: ' .. key
-    end
-    local record = cjson.decode(json)
-    if record.spent then
-        return 'ERR:input token already spent: ' .. key
-    end
-end
-for i = 1, num_inputs do
-    local key = KEYS[i]
-    local json = redis.call('GET', key)
-    local record = cjson.decode(json)
-    record.spent = true
-    record.spent_at = now
-    redis.call('SET', key, cjson.encode(record))
-end
-for i = 1, num_outputs do
-    local key = KEYS[num_inputs + i]
-    local existing = redis.call('EXISTS', key)
-    if existing == 1 then
-        return 'ERR:output token already exists: ' .. key
-    end
-    local output_json = ARGV[5 + i]
-    redis.call('SET', key, output_json)
-end
-redis.call('SET', audit_key, audit_json)
-return 'ok'
-"#;
-
-/// Lua: atomic burn. Returns "ok" or "ERR:reason" (pipeline-safe).
-const BURN_LUA: &str = r#"
-local token_key = KEYS[1]
-local audit_key = KEYS[2]
-local now = ARGV[1]
-local audit_json = ARGV[2]
-local json = redis.call('GET', token_key)
-if not json then
-    return 'ERR:token not found'
-end
-local record = cjson.decode(json)
-if record.spent then
-    return 'ERR:token already spent'
-end
-record.spent = true
-record.spent_at = now
-redis.call('SET', token_key, cjson.encode(record))
-redis.call('SET', audit_key, audit_json)
-return 'ok'
-"#;
 
 #[async_trait]
 impl LedgerStore for RedisStore {
@@ -132,19 +134,40 @@ impl LedgerStore for RedisStore {
         let mut conn = self.conn();
         let mut pipe = redis::pipe();
 
-        let serialized: Vec<(String, String)> = records
-            .iter()
-            .map(|r| Ok((Self::token_key(&r.public_hash), serde_json::to_string(r)?)))
-            .collect::<anyhow::Result<Vec<_>>>()?;
-
-        serialized.iter().for_each(|(key, json)| {
-            pipe.cmd("SET").arg(key).arg(json).arg("NX");
+        // HSETNX on amount_wats to detect duplicates, then HSET remaining fields
+        records.iter().for_each(|r| {
+            pipe.cmd("HSETNX")
+                .arg(Self::key(&r.public_hash))
+                .arg("amount_wats")
+                .arg(r.amount_wats.to_string());
         });
+        let nx: Vec<bool> = pipe.query_async(&mut conn).await?;
 
-        let results: Vec<bool> = pipe.query_async(&mut conn).await?;
+        // Set remaining fields for new tokens
+        let mut set_pipe = redis::pipe();
+        nx.iter().zip(records.iter()).for_each(|(created, r)| {
+            if *created {
+                let k = Self::key(&r.public_hash);
+                set_pipe
+                    .cmd("HSET")
+                    .arg(&k)
+                    .arg("spent")
+                    .arg(if r.spent { "1" } else { "0" })
+                    .arg("created_at")
+                    .arg(r.created_at.to_rfc3339())
+                    .arg("origin")
+                    .arg(match r.origin {
+                        TokenOrigin::Mined => "mined",
+                        TokenOrigin::Replaced => "replaced",
+                    })
+                    .ignore();
+            }
+        });
+        if set_pipe.cmd_iter().count() > 0 {
+            let _: Vec<redis::Value> = set_pipe.query_async(&mut conn).await?;
+        }
 
-        results
-            .iter()
+        nx.iter()
             .zip(records.iter())
             .find(|(ok, _)| !**ok)
             .map(|(_, r)| anyhow::bail!("token already exists: {}", r.public_hash))
@@ -157,19 +180,22 @@ impl LedgerStore for RedisStore {
         }
         let mut conn = self.conn();
         let mut pipe = redis::pipe();
-
         hashes.iter().for_each(|h| {
-            pipe.cmd("GET").arg(Self::token_key(h));
+            pipe.cmd("HGETALL").arg(Self::key(h));
         });
-
-        let jsons: Vec<Option<String>> = pipe.query_async(&mut conn).await?;
-        jsons
-            .into_iter()
-            .map(|j| match j {
-                Some(s) => Ok(Some(serde_json::from_str(&s)?)),
-                None => Ok(None),
+        let results: Vec<std::collections::HashMap<String, String>> =
+            pipe.query_async(&mut conn).await?;
+        Ok(hashes
+            .iter()
+            .zip(results)
+            .map(|(h, f)| {
+                if f.is_empty() {
+                    None
+                } else {
+                    Self::hash_to_token(h, &f)
+                }
             })
-            .collect()
+            .collect())
     }
 
     async fn check_tokens(&self, hashes: &[String]) -> anyhow::Result<Vec<(String, Option<bool>)>> {
@@ -178,78 +204,58 @@ impl LedgerStore for RedisStore {
         }
         let mut conn = self.conn();
         let mut pipe = redis::pipe();
-
         hashes.iter().for_each(|h| {
-            pipe.cmd("GET").arg(Self::token_key(h));
+            pipe.cmd("HGET").arg(Self::key(h)).arg("spent");
         });
-
-        let jsons: Vec<Option<String>> = pipe.query_async(&mut conn).await?;
-
+        let results: Vec<Option<String>> = pipe.query_async(&mut conn).await?;
         Ok(hashes
             .iter()
-            .zip(jsons)
-            .map(|(hash, json_opt)| {
-                let status = json_opt.and_then(|j| {
-                    serde_json::from_str::<TokenRecord>(&j)
-                        .map(|r| r.spent)
-                        .ok()
-                });
-                (hash.clone(), status)
-            })
+            .zip(results)
+            .map(|(h, s)| (h.clone(), s.map(|v| v == "1")))
             .collect())
     }
 
-    // ── PIPELINED batch replace: ALL ops in ONE Redis round-trip ─────
-
+    /// Pipelined batch replace: ALL EVALSHA in ONE round-trip.
     async fn batch_replace(&self, ops: &[ReplaceOp]) -> Vec<ReplaceResult> {
         if ops.is_empty() {
             return Vec::new();
         }
-
-        // Build a SINGLE pipeline containing ALL EVALSHA calls.
-        // One round-trip for the entire batch — Redis executes them sequentially
-        // but network overhead is ONE RTT total instead of N RTTs.
         let mut conn = self.conn();
         let mut pipe = redis::pipe();
         let now = chrono::Utc::now().to_rfc3339();
 
         ops.iter().for_each(|op| {
-            let input_keys: Vec<String> = op.inputs.iter().map(|h| Self::token_key(h)).collect();
-            let output_keys: Vec<String> = op
+            let ik: Vec<String> = op.inputs.iter().map(|h| Self::key(h)).collect();
+            let ok: Vec<String> = op
                 .outputs
                 .iter()
-                .map(|o| Self::token_key(&o.public_hash))
+                .map(|o| Self::key(&o.public_hash))
                 .collect();
-            let num_keys = input_keys.len() + output_keys.len();
-            let audit_key = format!("{}replace:{}", Self::AUDIT_PREFIX, op.record.id);
+            let nk = ik.len() + ok.len();
+            let audit_key = format!("audit:replace:{}", op.record.id);
             let audit_json = serde_json::to_string(&op.record).unwrap_or_default();
-            let output_jsons: Vec<String> = op
-                .outputs
-                .iter()
-                .map(|o| serde_json::to_string(o).unwrap_or_default())
-                .collect();
 
-            let cmd = pipe.cmd("EVALSHA").arg(&self.replace_sha).arg(num_keys);
-
-            input_keys.iter().chain(output_keys.iter()).for_each(|k| {
+            let cmd = pipe.cmd("EVALSHA").arg(&self.replace_sha).arg(nk);
+            ik.iter().chain(ok.iter()).for_each(|k| {
                 cmd.arg(k);
             });
-
             cmd.arg(op.inputs.len().to_string())
                 .arg(op.outputs.len().to_string())
                 .arg(&now)
                 .arg(&audit_key)
                 .arg(&audit_json);
-
-            output_jsons.iter().for_each(|j| {
-                cmd.arg(j);
+            // Output fields: amount_wats, created_at, origin per output
+            op.outputs.iter().for_each(|o| {
+                cmd.arg(o.amount_wats.to_string())
+                    .arg(o.created_at.to_rfc3339())
+                    .arg(match o.origin {
+                        TokenOrigin::Mined => "mined",
+                        TokenOrigin::Replaced => "replaced",
+                    });
             });
         });
 
-        // ONE round-trip for ALL operations
-        let results: Result<Vec<redis::Value>, _> = pipe.query_async(&mut conn).await;
-
-        match results {
+        match pipe.query_async::<Vec<redis::Value>>(&mut conn).await {
             Ok(values) => values
                 .into_iter()
                 .map(|v| {
@@ -274,37 +280,29 @@ impl LedgerStore for RedisStore {
         }
     }
 
-    // ── PIPELINED batch burn ─────────────────────────────────────────
-
     async fn batch_burn(&self, ops: &[(String, BurnRecord)]) -> anyhow::Result<()> {
         if ops.is_empty() {
             return Ok(());
         }
-
         let mut conn = self.conn();
         let mut pipe = redis::pipe();
         let now = chrono::Utc::now().to_rfc3339();
 
         ops.iter().for_each(|(hash, record)| {
-            let token_key = Self::token_key(hash);
-            let audit_key = format!("{}burn:{}", Self::AUDIT_PREFIX, record.id);
-            let audit_json = serde_json::to_string(record).unwrap_or_default();
-
             pipe.cmd("EVALSHA")
                 .arg(&self.burn_sha)
                 .arg(2)
-                .arg(&token_key)
-                .arg(&audit_key)
+                .arg(Self::key(hash))
+                .arg(format!("audit:burn:{}", record.id))
                 .arg(&now)
-                .arg(&audit_json);
+                .arg(serde_json::to_string(record).unwrap_or_default());
         });
 
         let results: Vec<redis::Value> = pipe
             .query_async(&mut conn)
             .await
-            .map_err(|e| anyhow::anyhow!("batch burn pipeline failed: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("batch burn failed: {e}"))?;
 
-        // Check for first error (ERR: prefix from Lua string return)
         results
             .iter()
             .find_map(|v| {
@@ -314,14 +312,14 @@ impl LedgerStore for RedisStore {
                     _ => "",
                 };
                 s.strip_prefix("ERR:")
-                    .map(|err| anyhow::anyhow!("burn failed: {err}"))
+                    .map(|e| anyhow::anyhow!("burn failed: {e}"))
             })
             .map_or(Ok(()), Err)
     }
 
     async fn get_mining_state(&self) -> anyhow::Result<Option<MiningState>> {
         let mut conn = self.conn();
-        let json: Option<String> = conn.get(Self::MINING_STATE_KEY).await?;
+        let json: Option<String> = conn.get("mining:state").await?;
         json.map(|j| serde_json::from_str(&j).map_err(Into::into))
             .transpose()
     }
@@ -329,7 +327,7 @@ impl LedgerStore for RedisStore {
     async fn update_mining_state(&self, state: &MiningState) -> anyhow::Result<()> {
         let mut conn = self.conn();
         let json = serde_json::to_string(state)?;
-        conn.set::<_, _, ()>(Self::MINING_STATE_KEY, &json).await?;
+        conn.set::<_, _, ()>("mining:state", &json).await?;
         Ok(())
     }
 }
