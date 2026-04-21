@@ -1,0 +1,13 @@
+FROM rust:1-alpine AS build
+RUN apk add --no-cache musl-dev pkgconfig openssl-dev perl make
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+COPY config/ config/
+RUN cargo build --release -p webycash-server
+
+FROM alpine:3.21
+RUN apk add --no-cache libgcc
+COPY --from=build /app/target/release/webycash-server /usr/local/bin/
+EXPOSE 8080
+ENTRYPOINT ["webycash-server"]

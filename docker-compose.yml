@@ -1,8 +1,7 @@
 services:
-  # 3-node Redis cluster for parallel sharded throughput
-  redis-1: &redis-base
+  # --- 3 Redis nodes ---
+  redis-1: &redis
     image: redis:7-alpine
-    ports: ["6379:6379"]
     command: >
       redis-server --port 6379
       --io-threads 4 --io-threads-do-reads yes
@@ -10,60 +9,95 @@ services:
       --save "" --appendonly no
       --maxclients 65536 --lua-time-limit 10000
       --loglevel warning
-    volumes: [redis-data-1:/data]
+    networks: [bench]
 
   redis-2:
-    <<: *redis-base
-    ports: ["6380:6379"]
-    command: >
-      redis-server --port 6379
-      --io-threads 4 --io-threads-do-reads yes
-      --hz 100 --tcp-backlog 8192
-      --save "" --appendonly no
-      --maxclients 65536 --lua-time-limit 10000
-      --loglevel warning
-    volumes: [redis-data-2:/data]
+    <<: *redis
+    networks: [bench]
 
   redis-3:
-    <<: *redis-base
-    ports: ["6381:6379"]
-    command: >
-      redis-server --port 6379
-      --io-threads 4 --io-threads-do-reads yes
-      --hz 100 --tcp-backlog 8192
-      --save "" --appendonly no
-      --maxclients 65536 --lua-time-limit 10000
-      --loglevel warning
-    volumes: [redis-data-3:/data]
+    <<: *redis
+    networks: [bench]
+
+  # --- 3 webycash-server nodes (dev build inside Docker) ---
+  server-1: &server
+    build:
+      context: .
+      dockerfile: Dockerfile.bench
+    environment:
+      WEBCASH_MODE: testnet
+      WEBCASH_DB_BACKEND: redis
+      REDIS_URL: redis://redis-1:6379
+      WEBCASH_BIND_ADDR: 0.0.0.0:8080
+      WEBCASH_DIFFICULTY: "1"
+      RUST_LOG: webycash_server=warn
+    depends_on: [redis-1]
+    networks: [bench]
+
+  server-2:
+    <<: *server
+    environment:
+      WEBCASH_MODE: testnet
+      WEBCASH_DB_BACKEND: redis
+      REDIS_URL: redis://redis-2:6379
+      WEBCASH_BIND_ADDR: 0.0.0.0:8080
+      WEBCASH_DIFFICULTY: "1"
+      RUST_LOG: webycash_server=warn
+    depends_on: [redis-2]
+    networks: [bench]
+
+  server-3:
+    <<: *server
+    environment:
+      WEBCASH_MODE: testnet
+      WEBCASH_DB_BACKEND: redis
+      REDIS_URL: redis://redis-3:6379
+      WEBCASH_BIND_ADDR: 0.0.0.0:8080
+      WEBCASH_DIFFICULTY: "1"
+      RUST_LOG: webycash_server=warn
+    depends_on: [redis-3]
+    networks: [bench]
+
+  # --- Benchmark runner (inside Docker network) ---
+  bench:
+    image: python:3.12-alpine
+    depends_on: [server-1, server-2, server-3]
+    working_dir: /app
+    volumes:
+      - ./benches:/app
+    environment:
+      SERVERS: http://server-1:8080,http://server-2:8080,http://server-3:8080
+    networks: [bench]
+    command: sh -c "pip install --quiet aiohttp && sleep 3 && python3 server_bench.py"
+
+  # External access
+  redis-ext:
+    <<: *redis
+    ports: ["6379:6379"]
+    networks: [bench]
 
   foundationdb:
     image: foundationdb/foundationdb:7.3.43
-    ports:
-      - "4500:4500"
     environment:
       FDB_NETWORKING_MODE: host
-    volumes:
-      - fdb-data:/var/fdb/data
+    volumes: [fdb-data:/var/fdb/data]
+    networks: [bench]
 
   fdb-init:
     image: foundationdb/foundationdb:7.3.43
-    depends_on:
-      - foundationdb
+    depends_on: [foundationdb]
     entrypoint: ["/bin/bash", "-c"]
-    command:
-      - |
-        sleep 2
-        fdbcli --exec "configure new single memory"
-        echo "FoundationDB initialized"
+    command: ['sleep 2 && fdbcli --exec "configure new single memory"']
+    networks: [bench]
 
   dynamodb-local:
     image: amazon/dynamodb-local:latest
-    ports:
-      - "8000:8000"
     command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
+    networks: [bench]
+
+networks:
+  bench:
+    driver: bridge
 
 volumes:
-  redis-data-1:
-  redis-data-2:
-  redis-data-3:
   fdb-data:
