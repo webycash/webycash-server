@@ -1,0 +1,76 @@
+# Redis StatefulSet — 3 replicas with tuned configuration
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: webycash
+spec:
+  serviceName: redis
+  replicas: 3
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          command:
+            - redis-server
+            - --io-threads
+            - "8"
+            - --io-threads-do-reads
+            - "yes"
+            - --hz
+            - "100"
+            - --tcp-backlog
+            - "8192"
+            - --save
+            - ""
+            - --appendonly
+            - "no"
+            - --maxclients
+            - "65536"
+            - --maxmemory
+            - "400gb"
+            - --lua-time-limit
+            - "10000"
+            - --loglevel
+            - "warning"
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              cpu: "4"
+              memory: "400Gi"
+            limits:
+              cpu: "8"
+              memory: "480Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 100Gi
+        storageClassName: fast-nvme
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-master
+  namespace: webycash
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+  type: ClusterIP

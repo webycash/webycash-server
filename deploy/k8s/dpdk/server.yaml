@@ -1,0 +1,156 @@
+# webycash-server StatefulSet with AF_XDP DPDK networking
+# Requires: AF_XDP Device Plugin deployed, nodes labeled webycash.io/dpdk=true
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: webycash-server
+  namespace: webycash
+spec:
+  serviceName: webycash-server
+  replicas: 3
+  selector:
+    matchLabels:
+      app: webycash-server
+  template:
+    metadata:
+      labels:
+        app: webycash-server
+      annotations:
+        k8s.v1.cni.cncf.io/networks: webycash-afxdp
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/api/v1/stats"
+    spec:
+      nodeSelector:
+        webycash.io/dpdk: "true"
+      containers:
+        - name: server
+          image: webycash/webycash-server:latest
+          args: ["--config", "/etc/webycash/production.toml"]
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: WEBCASH_MODE
+              value: "production"
+            - name: WEBCASH_DB_BACKEND
+              value: "redis"
+            - name: REDIS_URL
+              value: "redis://redis-master.webycash.svc:6379"
+            - name: WEBCASH_COMPUTE
+              value: "auto"
+            - name: WEBCASH_NETWORK
+              value: "dpdk"
+            - name: WEBCASH_DPDK_IFACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.annotations['k8s.v1.cni.cncf.io/network-status']
+            - name: RUST_LOG
+              value: "webycash_server=info"
+          securityContext:
+            capabilities:
+              add:
+                - NET_RAW
+                - IPC_LOCK
+                - BPF
+          resources:
+            requests:
+              cpu: "2"
+              memory: "1Gi"
+              hugepages-2Mi: "2Gi"
+              afxdp/webycashPool: "1"
+            limits:
+              cpu: "4"
+              memory: "4Gi"
+              hugepages-2Mi: "2Gi"
+              afxdp/webycashPool: "1"
+          volumeMounts:
+            - name: hugepages
+              mountPath: /dev/hugepages
+            - name: config
+              mountPath: /etc/webycash
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+      volumes:
+        - name: hugepages
+          emptyDir:
+            medium: HugePages
+        - name: config
+          configMap:
+            name: webycash-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webycash-server
+  namespace: webycash
+spec:
+  selector:
+    app: webycash-server
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: webycash-config
+  namespace: webycash
+data:
+  production.toml: |
+    [server]
+    mode = "production"
+    bind_addr = "0.0.0.0:8080"
+
+    [server.db]
+    backend = "redis"
+
+    [server.h2]
+    max_concurrent_streams = 1000
+
+    [mining]
+    testnet_difficulty = 20
+    initial_difficulty = 20
+    reports_per_epoch = 1000
+    target_epoch_seconds = 10000
+    initial_mining_amount_wats = 20000000000
+    initial_subsidy_amount_wats = 0
+
+    [compute]
+    backend = "auto"
+    gpu_batch_threshold = 1000
+
+    [network]
+    plane = "dpdk"
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: webycash-server
+  namespace: webycash
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: webycash-server
+  minReplicas: 3
+  maxReplicas: 12
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

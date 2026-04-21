@@ -1,0 +1,25 @@
+# DPDK-ready webycash-server image with AF_XDP support.
+# Includes libbpf, libxdp, ethtool for AF_XDP PMD.
+# Use with AF_XDP Device Plugin for Kubernetes.
+
+FROM rust:1-bookworm AS build
+RUN apt-get update && apt-get install -y \
+    pkg-config libssl-dev libbpf-dev libxdp-dev \
+    libelf-dev clang llvm ethtool iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+COPY config/ config/
+RUN cargo build --release -p webycash-server
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y \
+    libbpf1 libxdp1 ethtool iproute2 libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /app/target/release/webycash-server /usr/local/bin/
+COPY --from=build /app/target/release/bench_replace /usr/local/bin/
+COPY config/ /etc/webycash/
+EXPOSE 8080
+ENTRYPOINT ["webycash-server"]
+CMD ["--config", "/etc/webycash/production.toml"]

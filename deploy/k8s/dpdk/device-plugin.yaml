@@ -1,0 +1,52 @@
+# AF_XDP Device Plugin DaemonSet
+# Manages eBPF programs on behalf of pods, provides XSKMAP file descriptors.
+# See: https://github.com/redhat-et/afxdp-plugins-for-kubernetes
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: afxdp-device-plugin
+  namespace: kube-system
+  labels:
+    app: afxdp-device-plugin
+spec:
+  selector:
+    matchLabels:
+      app: afxdp-device-plugin
+  template:
+    metadata:
+      labels:
+        app: afxdp-device-plugin
+    spec:
+      hostNetwork: true
+      nodeSelector:
+        webycash.io/dpdk: "true"
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          effect: NoSchedule
+      containers:
+        - name: device-plugin
+          image: intel/afxdp-plugins-for-kubernetes:latest
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: device-plugin
+              mountPath: /var/lib/kubelet/device-plugins
+            - name: cni-bin
+              mountPath: /opt/cni/bin
+            - name: log
+              mountPath: /var/log/afxdp
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+      volumes:
+        - name: device-plugin
+          hostPath:
+            path: /var/lib/kubelet/device-plugins
+        - name: cni-bin
+          hostPath:
+            path: /opt/cni/bin
+        - name: log
+          hostPath:
+            path: /var/log/afxdp
