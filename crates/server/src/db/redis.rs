@@ -4,15 +4,66 @@ use redis::AsyncCommands;
 use super::{BurnRecord, LedgerStore, ReplacementRecord, TokenRecord};
 use crate::protocol::mining::MiningState;
 
+/// Number of parallel Redis connections for concurrent operations.
+const REDIS_POOL_SIZE: usize = 16;
+
 pub struct RedisStore {
-    pool: redis::aio::ConnectionManager,
+    /// Multiple connections for parallel in-flight operations.
+    /// Round-robin across pool for maximum throughput.
+    conns: Vec<redis::aio::ConnectionManager>,
+    conn_idx: std::sync::atomic::AtomicUsize,
+    /// Pre-loaded script SHA for EVALSHA (eliminates script transfer per call)
+    replace_sha: String,
+    burn_sha: String,
+    mark_spent_sha: String,
 }
 
 impl RedisStore {
     pub async fn new(url: &str) -> anyhow::Result<Self> {
         let client = redis::Client::open(url)?;
-        let pool = redis::aio::ConnectionManager::new(client).await?;
-        Ok(Self { pool })
+
+        // Create pool of connections for parallel operations
+        let conns = futures::future::try_join_all(
+            (0..REDIS_POOL_SIZE).map(|_| redis::aio::ConnectionManager::new(client.clone())),
+        )
+        .await?;
+
+        // Pre-load Lua scripts — EVALSHA uses SHA1 hash (no script transfer per call)
+        let replace_sha = redis::Script::new(ATOMIC_REPLACE_LUA)
+            .prepare_invoke()
+            .load_async(&mut conns[0].clone())
+            .await?;
+        let burn_sha = redis::Script::new(BURN_LUA)
+            .prepare_invoke()
+            .load_async(&mut conns[0].clone())
+            .await?;
+        let mark_spent_sha = redis::Script::new(MARK_SPENT_LUA)
+            .prepare_invoke()
+            .load_async(&mut conns[0].clone())
+            .await?;
+
+        tracing::info!(
+            pool_size = REDIS_POOL_SIZE,
+            replace_sha = %replace_sha,
+            "Redis initialized ({REDIS_POOL_SIZE} connections, EVALSHA mode)"
+        );
+
+        Ok(Self {
+            conns,
+            conn_idx: std::sync::atomic::AtomicUsize::new(0),
+            replace_sha,
+            burn_sha,
+            mark_spent_sha,
+        })
+    }
+
+    /// Get next connection from the round-robin pool.
+    fn conn(&self) -> redis::aio::ConnectionManager {
+        let idx = self
+            .conn_idx
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            % self.conns.len();
+        self.conns[idx].clone()
     }
 
     fn token_key(hash: &str) -> String {
@@ -114,7 +165,7 @@ return 'ok'
 #[async_trait]
 impl LedgerStore for RedisStore {
     async fn insert_token(&self, record: &TokenRecord) -> anyhow::Result<()> {
-        let mut conn = self.pool.clone();
+        let mut conn = self.conn();
         let key = Self::token_key(&record.public_hash);
         let json = serde_json::to_string(record)?;
 
@@ -133,7 +184,7 @@ impl LedgerStore for RedisStore {
     }
 
     async fn get_token(&self, public_hash: &str) -> anyhow::Result<Option<TokenRecord>> {
-        let mut conn = self.pool.clone();
+        let mut conn = self.conn();
         let key = Self::token_key(public_hash);
         let json: Option<String> = conn.get(&key).await?;
         match json {
@@ -143,14 +194,14 @@ impl LedgerStore for RedisStore {
     }
 
     async fn mark_spent(&self, public_hash: &str) -> anyhow::Result<bool> {
-        let mut conn = self.pool.clone();
+        let mut conn = self.conn();
         let key = Self::token_key(public_hash);
         let now = chrono::Utc::now().to_rfc3339();
 
-        // Atomic via Lua script — no TOCTOU race
-        let result: i32 = redis::cmd("EVAL")
-            .arg(MARK_SPENT_LUA)
-            .arg(1) // num keys
+        // EVALSHA: pre-cached Lua script — no TOCTOU race
+        let result: i32 = redis::cmd("EVALSHA")
+            .arg(&self.mark_spent_sha)
+            .arg(1)
             .arg(&key)
             .arg(&now)
             .query_async(&mut conn)
@@ -165,7 +216,7 @@ impl LedgerStore for RedisStore {
         outputs: &[TokenRecord],
         record: &ReplacementRecord,
     ) -> anyhow::Result<()> {
-        let mut conn = self.pool.clone();
+        let mut conn = self.conn();
         let now = chrono::Utc::now().to_rfc3339();
 
         // Build keys: [input_keys..., output_keys...]
@@ -185,9 +236,9 @@ impl LedgerStore for RedisStore {
             .map(serde_json::to_string)
             .collect::<serde_json::Result<Vec<_>>>()?;
 
-        // Build EVAL command with chained iterators
-        let mut cmd = redis::cmd("EVAL");
-        cmd.arg(ATOMIC_REPLACE_LUA).arg(num_keys);
+        // EVALSHA: pre-cached script SHA, no script transfer per call
+        let mut cmd = redis::cmd("EVALSHA");
+        cmd.arg(&self.replace_sha).arg(num_keys);
 
         // Keys: inputs then outputs (single chain)
         input_keys.iter().chain(output_keys.iter()).for_each(|k| {
@@ -217,7 +268,7 @@ impl LedgerStore for RedisStore {
     }
 
     async fn get_mining_state(&self) -> anyhow::Result<Option<MiningState>> {
-        let mut conn = self.pool.clone();
+        let mut conn = self.conn();
         let json: Option<String> = conn.get(Self::MINING_STATE_KEY).await?;
         match json {
             Some(j) => Ok(Some(serde_json::from_str(&j)?)),
@@ -226,23 +277,23 @@ impl LedgerStore for RedisStore {
     }
 
     async fn update_mining_state(&self, state: &MiningState) -> anyhow::Result<()> {
-        let mut conn = self.pool.clone();
+        let mut conn = self.conn();
         let json = serde_json::to_string(state)?;
         conn.set::<_, _, ()>(Self::MINING_STATE_KEY, &json).await?;
         Ok(())
     }
 
     async fn burn_token(&self, public_hash: &str, record: &BurnRecord) -> anyhow::Result<()> {
-        let mut conn = self.pool.clone();
+        let mut conn = self.conn();
         let token_key = Self::token_key(public_hash);
         let audit_key = format!("{}burn:{}", Self::AUDIT_PREFIX, record.id);
         let now = chrono::Utc::now().to_rfc3339();
         let audit_json = serde_json::to_string(record)?;
 
-        // Atomic via Lua script — no TOCTOU race
-        let _: String = redis::cmd("EVAL")
-            .arg(BURN_LUA)
-            .arg(2) // num keys
+        // EVALSHA: pre-cached Lua script — no TOCTOU race
+        let _: String = redis::cmd("EVALSHA")
+            .arg(&self.burn_sha)
+            .arg(2)
             .arg(&token_key)
             .arg(&audit_key)
             .arg(&now)
@@ -255,7 +306,7 @@ impl LedgerStore for RedisStore {
     }
 
     async fn check_tokens(&self, hashes: &[String]) -> anyhow::Result<Vec<(String, Option<bool>)>> {
-        let mut conn = self.pool.clone();
+        let mut conn = self.conn();
 
         // Pipeline: N sequential round-trips → 1 pipelined round-trip
         let keys: Vec<String> = hashes.iter().map(|h| Self::token_key(h)).collect();
