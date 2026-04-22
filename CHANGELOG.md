@@ -4,6 +4,65 @@ All notable changes to `webycash-server` are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.2.3] - 2026-04-22
+
+### Architecture
+- **Pure functional declarative**: all `for` loops eliminated, `try_fold`/`collect`/`chain` everywhere
+- **`#[gen_server]` proc macro**: generates Actor/Message/Handle from handler impl blocks
+- **`#[supervisor]` proc macro**: declarative one-for-one restart supervision tree
+- **`handler!`/`validate!` macros**: eliminate API body-parsing boilerplate
+- **Batch-native `LedgerStore` trait**: every operation is batch-first, single ops are batches of 1
+- **Batch coalescing actor**: collects concurrent replace requests, fires single pipelined batch
+- **Immutable state transitions**: WebcashServer fully immutable after construction
+
+### Performance (25x improvement)
+- **Redis HASH storage**: native HSET/HGET, no JSON encode/decode in Redis
+- **Pipelined EVALSHA**: all batch replace operations in single Redis round-trip
+- **N+1 to 1 RTT**: replace bypasses Free Monad interpreter, calls atomic_replace directly
+- **16-connection pool**: round-robin across connections for max parallelism
+- **Zero-copy CORS**: direct header injection, no response rebuild
+- **12,731 TPS** replace (3 servers, in-Docker benchmark, up from ~500 TPS)
+
+### DynamoDB optimization
+- **Native attributes**: amount_wats (N), spent (BOOL) instead of JSON blob
+- **BatchGetItem**: up to 100 items per API call (was N individual GetItem)
+- **BatchWriteItem**: up to 25 items per API call (was N individual PutItem)
+- **Zero pre-reads**: Update with condition expression (1 RTT, was 2 RTT)
+- **ProjectionExpression**: check_tokens only fetches spent field
+
+### Compute backends
+- **ComputeBackend trait**: pluggable CPU/CUDA/wgpu
+- **CPU**: sha2 + spawn_blocking (default)
+- **CUDA**: cudarc, persistent kernel SHA256 (feature = "cuda")
+- **wgpu**: Metal/Vulkan/DX12 compute shaders (feature = "wgpu-compute")
+- **GPU SHA256**: 1.5M H/s on AMD RX 580 via Metal
+
+### Unified config system
+- Three pluggable axes: `[compute]`, `[network]`, `[server.db]`
+- `compute.backend = cpu|cuda|wgpu|auto`
+- `network.plane = kernel|dpdk`
+- Environment variables: `WEBCASH_COMPUTE`, `WEBCASH_NETWORK`, `WEBCASH_DPDK_IFACE`
+
+### Kubernetes DPDK/AF_XDP deployment
+- AF_XDP Device Plugin DaemonSet
+- NetworkAttachmentDefinition for AF_XDP CNI
+- Server StatefulSet with hugepages, CAP_BPF, CAP_NET_RAW
+- Redis StatefulSet (io-threads=8, 400GB maxmemory)
+- HorizontalPodAutoscaler (3-12 replicas)
+- DPDK-ready Docker image (libbpf, libxdp, ethtool)
+
+### Security hardening
+- 1MB request body limits (http_body_util::Limited)
+- Past timestamp validation (5 min window)
+- Configurable CORS (default "*", overridable)
+- HTTP/2 settings (max_concurrent_streams, window_size, frame_size)
+- 10 penetration tests: concurrent double-spend, replay, overflow, injection
+
+### Testing
+- 22 unit tests, 11 integration tests, 10 penetration tests (43 total)
+- In-Docker Rust benchmark binary (HTTP/1.1 keep-alive pool, 3 servers)
+- GPU compute benchmarks (CPU vs wgpu)
+
 ## [0.2.2] - 2026-04-21
 
 ### Fixed
