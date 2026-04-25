@@ -74,8 +74,10 @@ impl Default for MiningConfig {
     fn default() -> Self {
         Self {
             mode: MiningMode::webcash_production(),
-            mining_amount_wats: 195_312_500_0, // 195.3125 webcash, matches production
-            subsidy_amount_wats: 9_765_625_00,  // 9.765625 webcash
+            // 195.3125 webcash * 1e8 wats/webcash = 19_531_250_000 wats. Matches production.
+            mining_amount_wats: 19_531_250_000,
+            // 9.765625 webcash * 1e8 = 976_562_500 wats
+            subsidy_amount_wats: 976_562_500,
             max_issuance: None,
             require_pow_for_issuance: false,
         }

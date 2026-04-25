@@ -956,8 +956,10 @@ mod tests {
 
     #[test]
     fn wats_format_matches_production() {
-        assert_eq!(wats_to_string(195_312_500_0), "195.3125");
-        assert_eq!(wats_to_string(9_765_625_00), "9.765625");
+        // 195.3125 webycash = 19_531_250_000 wats (8 decimal places)
+        assert_eq!(wats_to_string(19_531_250_000), "195.3125");
+        // 9.765625 webycash = 976_562_500 wats
+        assert_eq!(wats_to_string(976_562_500), "9.765625");
         assert_eq!(wats_to_string(100_000_000), "1");
         assert_eq!(wats_to_string(0), "0");
         assert_eq!(wats_to_string(150_000_000), "1.5");
