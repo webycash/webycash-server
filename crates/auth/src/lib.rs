@@ -252,4 +252,65 @@ mod tests {
         // Different nonce ok
         cache.check_and_insert(&fp, "nonce-2").unwrap();
     }
+
+    /// Round-trip: generate a V4 OpenPGP cert with Ed25519 primary key,
+    /// armor it, parse via `add_pgp_armored`, sign with the key bytes
+    /// extracted from the cert, and verify the signature against the
+    /// registered (fp, pubkey).
+    #[cfg(feature = "openpgp")]
+    #[test]
+    fn pgp_armored_cert_round_trip() {
+        use pgp::composed::{
+            EncryptionCaps, KeyType, SecretKeyParamsBuilder, SignedPublicKey,
+        };
+        use pgp::types::{KeyDetails as _, PlainSecretParams};
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
+
+        let mut rng = StdRng::seed_from_u64(42);
+        let key_params = SecretKeyParamsBuilder::default()
+            .key_type(KeyType::Ed25519)
+            .can_certify(true)
+            .can_sign(true)
+            .can_encrypt(EncryptionCaps::None)
+            .primary_user_id("Test Issuer <issuer@example.org>".into())
+            .passphrase(None)
+            .build()
+            .expect("build params");
+        let signed_secret = key_params
+            .generate(&mut rng)
+            .expect("generate secret key");
+
+        // Extract the raw 32-byte Ed25519 secret seed.
+        let seed = signed_secret
+            .primary_key
+            .unlock(&"".into(), |_pub_params, plain| match plain {
+                PlainSecretParams::Ed25519(k) => Ok(*k.as_bytes()),
+                _ => panic!("expected Ed25519 secret"),
+            })
+            .expect("unlock outer")
+            .expect("unlock inner");
+        let dalek_sk = ed25519_dalek::SigningKey::from_bytes(&seed);
+
+        // Armor the public side.
+        let public_key = signed_secret.to_public_key();
+        let armor = public_key
+            .to_armored_string(None.into())
+            .expect("armor public key");
+
+        // Round-trip through the registry.
+        let mut reg = IssuerRegistry::new();
+        let fp_hex = reg.add_pgp_armored(&armor).expect("register");
+        assert_eq!(
+            fp_hex,
+            hex::encode(SignedPublicKey::from(signed_secret).primary_key.fingerprint().as_bytes())
+        );
+
+        // The signature produced via ed25519-dalek (using the seed we
+        // dug out of the cert) verifies against the registered cert.
+        let body = b"canonical body to sign";
+        let sig = ed25519_dalek::Signer::sign(&dalek_sk, body);
+        reg.verify(&PgpFingerprint(fp_hex), body, &sig.to_bytes())
+            .expect("verify");
+    }
 }

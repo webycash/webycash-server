@@ -27,3 +27,7 @@ chrono = { workspace = true }
 # Pure-Rust OpenPGP. WASM-friendly. Used to parse V4 certs and extract
 # their primary Ed25519 verifying key + fingerprint.
 pgp = { version = "0.19", optional = true }
+
+[dev-dependencies]
+pgp = "0.19"
+rand = "0.8"

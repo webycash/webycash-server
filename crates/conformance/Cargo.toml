@@ -28,3 +28,6 @@ sha2 = { workspace = true }
 serde_json = { workspace = true }
 ed25519-dalek = { workspace = true }
 hex = { workspace = true }
+pgp = "0.19"
+rand = "0.8"
+tempfile = "3"
