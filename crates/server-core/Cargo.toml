@@ -16,9 +16,15 @@ webycash-compute = { workspace = true }
 webycash-mining = { workspace = true }
 webycash-auth = { workspace = true }
 webycash-macros = { workspace = true }
-webycash-aluvm-runtime = { workspace = true }
 ed25519-dalek = { workspace = true }
-aluvm = "0.12"
+# Note: AluVM is intentionally NOT pulled in here. RGB contract validation
+# happens client-side in webylib-wasm/contract.rs. The server is a
+# single-use-seal registry — its only job is to atomically swap input
+# secrets' public hashes for output secrets' public hashes within a
+# (contract_id, issuer_fp) namespace, and (for splittable assets) verify
+# amount conservation. Real AluVM execution against a contract's
+# transition data lives in the wallet, where the bytecode + ancestor
+# state are accessible.
 
 hyper = { workspace = true }
 hyper-util = { workspace = true }
@@ -40,5 +46,3 @@ base64 = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 
-[dev-dependencies]
-webycash-asset-webcash = { workspace = true }
