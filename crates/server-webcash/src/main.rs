@@ -18,7 +18,7 @@ use webycash_mining::{MiningConfig, MiningMode};
 use webycash_server_core::{serve, ServeConfig, Server};
 #[cfg(feature = "fdb")]
 use webycash_storage::fdb_backend::FdbStore;
-#[cfg(all(feature = "redis", feature = "fdb"))]
+#[cfg(feature = "fdb")]
 use webycash_storage::redis_fdb_backend::RedisFdbStore;
 use webycash_storage::dynamodb_backend::DynamoDbStore;
 use webycash_storage::redis_backend::RedisStore;
@@ -96,7 +96,7 @@ async fn main() -> anyhow::Result<()> {
                 .context("opening FoundationDB")?;
             serve(Server::new(cfg, store)).await
         }
-        #[cfg(all(feature = "redis", feature = "fdb"))]
+        #[cfg(feature = "fdb")]
         "redis_fdb" => {
             let network = unsafe { ::foundationdb::boot() };
             std::mem::forget(network);

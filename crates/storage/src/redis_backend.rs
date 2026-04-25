@@ -145,7 +145,7 @@ where
                 r.to_fields(&mut fields);
                 fields.remove("amount_wats");
                 let k = self.keys.token_key(A::NAME, &r.namespace(), r.public_hash());
-                let mut cmd = set_pipe.cmd("HSET");
+                let cmd = set_pipe.cmd("HSET");
                 cmd.arg(&k);
                 fields.iter().for_each(|(name, value)| {
                     cmd.arg(name).arg(value);

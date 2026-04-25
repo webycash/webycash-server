@@ -30,8 +30,8 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
 use webycash_asset_core::{
-    Amount, Asset, AssetPublic, AssetSecret, CollectibleRecordBuilder, IssuedAsset, MintableAsset,
-    RecordBuilder, RecordOrigin, SplittableAsset, TransferableAsset,
+    Amount, Asset, AssetPublic, CollectibleRecordBuilder, IssuedAsset, MintableAsset, RecordBuilder,
+    RecordOrigin, SplittableAsset, TransferableAsset,
 };
 use webycash_auth::{IssuerRegistry, NonceCache};
 use webycash_mining::MiningConfig;
@@ -66,10 +66,10 @@ impl ServeConfig {
 /// The server is a **single-use-seal registry**, not a contract validator.
 /// Per RGB's design, contract execution is client-side: the wallet runs
 /// the compiled AluVM library against the intended state transition
-/// before submitting `/replace` or `/transfer`. The server's job is to
-/// atomically `(verify input public_hash exists + unspent) → (mark spent
-/// + insert output)` within a single `(contract_id, issuer_fp)`
-/// namespace, plus enforce amount conservation for splittable assets.
+/// before submitting `/replace`. The server's job is to atomically
+/// `(verify input public_hash exists + unspent) -> (mark spent + insert
+/// output)` within a single `(contract_id, issuer_fp)` namespace, plus
+/// enforce amount conservation for splittable assets.
 ///
 /// Whoever holds the secret owns the asset — the server witnesses the
 /// transfer of that ownership.
@@ -317,19 +317,9 @@ async fn collect_body(req: Request<Incoming>) -> Result<Bytes, hyper::Error> {
 /// Body envelope shared by replace + burn + mining_report.
 /// `legalese.terms` must be `true` for any state-mutating endpoint.
 #[derive(serde::Deserialize)]
-struct LegaleseEnvelope {
-    #[serde(default)]
-    legalese: Option<Legalese>,
-}
-
-#[derive(serde::Deserialize)]
 struct Legalese {
     #[serde(default)]
     terms: bool,
-}
-
-fn legalese_accepted(envelope: &LegaleseEnvelope) -> bool {
-    envelope.legalese.as_ref().is_some_and(|l| l.terms)
 }
 
 mod handlers {
@@ -688,7 +678,6 @@ mod handlers {
             #[serde(default, deserialize_with = "deserialize_flexible_u64")]
             #[allow(dead_code)]
             timestamp: u64,
-            difficulty: u32,
         }
 
         let body = match collect_body(req).await {
@@ -1325,29 +1314,6 @@ fn normalize_amount_str(s: &str) -> String {
     s.to_string()
 }
 
-/// Re-emit a JSON object with single spaces after ':' and ',' to match
-/// Python `json.dumps(...)` default output (Tornado default).
-fn compact_with_spaces(json: &str) -> String {
-    let mut out = String::with_capacity(json.len() + json.len() / 8);
-    let mut in_string = false;
-    let mut escape = false;
-    for c in json.chars() {
-        out.push(c);
-        if escape {
-            escape = false;
-            continue;
-        }
-        match c {
-            '\\' if in_string => escape = true,
-            '"' => in_string = !in_string,
-            ':' if !in_string => out.push(' '),
-            ',' if !in_string => out.push(' '),
-            _ => {}
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1386,14 +1352,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn compact_with_spaces_inserts_python_dumps_format() {
-        let input = r#"{"status":"success","results":{"x":{"spent":null}}}"#;
-        let output = compact_with_spaces(input);
-        // Single space after colon AND comma, none added inside strings.
-        assert_eq!(
-            output,
-            r#"{"status": "success", "results": {"x": {"spent": null}}}"#
-        );
-    }
 }
