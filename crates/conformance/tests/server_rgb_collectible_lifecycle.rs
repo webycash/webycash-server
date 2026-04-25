@@ -116,20 +116,22 @@ fn run_lifecycle(bind: &str, sk: &SigningKey, issuer: &str) {
     assert_eq!(status, 200);
     assert!(body.contains(r#""spent": false"#), "hc1: {body}");
 
-    // 3. /api/v1/transfer — 1:1 ownership move within same namespace.
+    // 3. /api/v1/replace — 1:1 ownership replace within same namespace.
+    //    The server always replaces secrets; non-splittable just constrains
+    //    arity to 1 input → 1 output.
     let new_secret = "b".repeat(64);
     let new_hash = sha256_hex(&new_secret);
     let (status, body) = post(
-        &format!("http://{bind}/api/v1/transfer"),
+        &format!("http://{bind}/api/v1/replace"),
         &serde_json::to_string(&serde_json::json!({
-            "input": format!("secret:{nft_secret}:{contract}:{issuer}"),
-            "output": format!("secret:{new_secret}:{contract}:{issuer}"),
+            "webcashes": [format!("secret:{nft_secret}:{contract}:{issuer}")],
+            "new_webcashes": [format!("secret:{new_secret}:{contract}:{issuer}")],
             "legalese": {"terms": true},
         }))
         .unwrap(),
     )
-    .expect("transfer");
-    assert_eq!(status, 200, "transfer: {body}");
+    .expect("replace");
+    assert_eq!(status, 200, "replace: {body}");
     assert!(body.contains(r#""status": "success""#));
 
     // 4. health_check — old hash spent, new hash unspent.
@@ -152,13 +154,13 @@ fn run_lifecycle(bind: &str, sk: &SigningKey, issuer: &str) {
         "hc2 output: {body}"
     );
 
-    // 5. Cross-namespace transfer must fail.
+    // 5. Cross-namespace replace must fail.
     let alt_contract = "different-collection";
     let (xn, _) = post(
-        &format!("http://{bind}/api/v1/transfer"),
+        &format!("http://{bind}/api/v1/replace"),
         &serde_json::to_string(&serde_json::json!({
-            "input": format!("secret:{new_secret}:{contract}:{issuer}"),
-            "output": format!("secret:{}:{alt_contract}:{issuer}", "9".repeat(64)),
+            "webcashes": [format!("secret:{new_secret}:{contract}:{issuer}")],
+            "new_webcashes": [format!("secret:{}:{alt_contract}:{issuer}", "9".repeat(64))],
             "legalese": {"terms": true},
         }))
         .unwrap(),
@@ -166,9 +168,9 @@ fn run_lifecycle(bind: &str, sk: &SigningKey, issuer: &str) {
     .expect("xn");
     assert_eq!(xn, 500, "cross-contract must 500");
 
-    // 6. burn_collectible.
+    // 6. /api/v1/burn (non-splittable variant).
     let (status, _) = post(
-        &format!("http://{bind}/api/v1/burn_collectible"),
+        &format!("http://{bind}/api/v1/burn"),
         &serde_json::to_string(&serde_json::json!({
             "webcash": format!("secret:{new_secret}:{contract}:{issuer}"),
             "legalese": {"terms": true},

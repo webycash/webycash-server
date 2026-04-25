@@ -229,16 +229,19 @@ where
     A::Record: HashRecord,
     S: LedgerStore<A>,
 {
+    // Non-splittable flavors expose the SAME endpoint names as splittable
+    // ones. Servers always replace secrets; the difference is the
+    // arity constraint (1:1 here, N:M for splittable).
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/api/v1/target") => handlers::target::<A, S>(state).await,
         (&Method::GET, "/terms") | (&Method::GET, "/terms/text") => handlers::terms().await,
         (&Method::POST, "/api/v1/health_check") => {
             handlers::health_check_collectible::<A, S>(state, req).await
         }
-        (&Method::POST, "/api/v1/transfer") => {
-            handlers::transfer::<A, S>(state, req).await
+        (&Method::POST, "/api/v1/replace") => {
+            handlers::replace_collectible::<A, S>(state, req).await
         }
-        (&Method::POST, "/api/v1/burn_collectible") => {
+        (&Method::POST, "/api/v1/burn") => {
             handlers::burn_collectible::<A, S>(state, req).await
         }
         (&Method::POST, "/api/v1/issue") => {
@@ -968,20 +971,24 @@ mod handlers {
         ok_text_html_json(body)
     }
 
-    /// `POST /api/v1/transfer`
+    /// `POST /api/v1/replace` — non-splittable variant.
     ///
-    /// Non-splittable 1:1 ownership transfer (RGB21 NFT). Body shape:
+    /// Replace ONE secret with ONE new secret (RGB21 NFT). Servers
+    /// always replace secrets; the non-splittable case is a 1:1
+    /// constrained replace (no amount conservation, exactly one input,
+    /// exactly one output). Same wire shape as the splittable replace
+    /// for consistency:
     /// ```json
     /// {
-    ///   "input": "secret:{hex}:{contract}:{issuer}",
-    ///   "output": "secret:{hex}:{contract}:{issuer}",
+    ///   "webcashes":     ["secret:{hex}:{contract}:{issuer}"],
+    ///   "new_webcashes": ["secret:{hex2}:{contract}:{issuer}"],
     ///   "legalese": {"terms": true}
     /// }
     /// ```
-    /// Server enforces same-namespace + atomically marks input spent and
-    /// inserts output. AluVM transition validation hook present (currently
-    /// stubbed via `TransferableAsset::validate_transfer`).
-    pub async fn transfer<A, S>(
+    /// Server enforces same-namespace + 1:1 arity + atomically marks
+    /// input spent and inserts output. (Real RGB transition validation
+    /// happens client-side, before the wallet submits this request.)
+    pub async fn replace_collectible<A, S>(
         state: &Server<A, S>,
         req: Request<Incoming>,
     ) -> Response<Full<Bytes>>
@@ -991,9 +998,11 @@ mod handlers {
         S: LedgerStore<A>,
     {
         #[derive(serde::Deserialize)]
-        struct TransferBody {
-            input: String,
-            output: String,
+        struct ReplaceBody {
+            #[serde(default)]
+            webcashes: Vec<String>,
+            #[serde(default)]
+            new_webcashes: Vec<String>,
             #[serde(default)]
             legalese: Option<Legalese>,
         }
@@ -1001,18 +1010,24 @@ mod handlers {
             Ok(b) => b,
             Err(e) => return server_error(&format!("body: {e}")),
         };
-        let parsed: TransferBody = match serde_json::from_slice(&body) {
+        let parsed: ReplaceBody = match serde_json::from_slice(&body) {
             Ok(v) => v,
             Err(e) => return server_error(&format!("parse: {e}")),
         };
         if !parsed.legalese.as_ref().is_some_and(|l| l.terms) {
             return server_error("legalese.terms must be true");
         }
-        let input = match A::parse_secret(&parsed.input) {
+        // Non-splittable arity: exactly 1 input, exactly 1 output.
+        if parsed.webcashes.len() != 1 || parsed.new_webcashes.len() != 1 {
+            return server_error(
+                "non-splittable replace requires exactly 1 input and 1 output",
+            );
+        }
+        let input = match A::parse_secret(&parsed.webcashes[0]) {
             Ok(s) => s,
             Err(e) => return server_error(&format!("invalid input: {e}")),
         };
-        let output = match A::parse_secret(&parsed.output) {
+        let output = match A::parse_secret(&parsed.new_webcashes[0]) {
             Ok(s) => s,
             Err(e) => return server_error(&format!("invalid output: {e}")),
         };
@@ -1022,16 +1037,15 @@ mod handlers {
         {
             return server_error("namespace mismatch (input/output)");
         }
-        // Type-level transfer-validity (asset-specific). For RGB21 NFTs
-        // this is a permissive default; real transition validation lives
-        // CLIENT-SIDE in the wallet (webylib-wasm/contract.rs), where
-        // the contract bytecode and ancestor state are accessible.
+        // Type-level structural-validity (asset-specific). Real RGB
+        // transition validation lives CLIENT-SIDE in the wallet
+        // (webylib-wasm/contract.rs), where the contract bytecode and
+        // ancestor state are accessible.
         if let Err(e) = A::validate_transfer(&input, &output) {
-            return server_error(&format!("transition: {e}"));
+            return server_error(&format!("rejected: {e}"));
         }
 
-        // For RGB21 the "amount" is conceptually 1; conservation is implicit
-        // (1 input → 1 output). Build the storage namespace from the input.
+        // Non-splittable: amount is conceptually 1; arity is 1:1.
         let ns = match <A as CollectibleRecordBuilder>::namespace_envelope(&input) {
             Some((c, i)) => Namespace::scoped(ContractId(c), PgpFingerprint(i)),
             None => Namespace::unscoped(),
@@ -1056,12 +1070,12 @@ mod handlers {
         let results = state.store.batch_replace(&ns, &[op]).await;
         match results.into_iter().next() {
             Some(ReplaceResult::Ok) => ok_text_html_json(r#"{"status": "success"}"#.to_string()),
-            Some(ReplaceResult::Failed(e)) => server_error(&format!("transfer failed: {e}")),
+            Some(ReplaceResult::Failed(e)) => server_error(&format!("replace failed: {e}")),
             None => server_error("no result"),
         }
     }
 
-    /// `POST /api/v1/burn_collectible` — same shape as /burn but for non-splittable assets.
+    /// `POST /api/v1/burn` — non-splittable variant.
     pub async fn burn_collectible<A, S>(
         state: &Server<A, S>,
         req: Request<Incoming>,
