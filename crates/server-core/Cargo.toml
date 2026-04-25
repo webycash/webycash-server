@@ -20,9 +20,6 @@ webycash-aluvm-runtime = { workspace = true }
 ed25519-dalek = { workspace = true }
 aluvm = "0.12"
 
-[dev-dependencies]
-webycash-asset-webcash = { workspace = true }
-
 hyper = { workspace = true }
 hyper-util = { workspace = true }
 http = { workspace = true }
@@ -42,3 +39,6 @@ uuid = { workspace = true }
 base64 = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+
+[dev-dependencies]
+webycash-asset-webcash = { workspace = true }
