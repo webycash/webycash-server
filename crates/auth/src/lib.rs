@@ -108,6 +108,43 @@ impl IssuerRegistry {
     pub fn len(&self) -> usize {
         self.keys.len()
     }
+
+    /// Parse an ASCII-armored OpenPGP V4 cert, extract the primary signing
+    /// key (must be Ed25519), and register it. Returns the discovered
+    /// fingerprint as 40-hex-char V4 form.
+    ///
+    /// Requires the `openpgp` cargo feature.
+    #[cfg(feature = "openpgp")]
+    pub fn add_pgp_armored(&mut self, cert_armored: &str) -> Result<String, AuthError> {
+        use pgp::composed::Deserializable;
+        use pgp::types::{KeyDetails, PublicParams};
+
+        let (cert, _) = pgp::composed::SignedPublicKey::from_string(cert_armored)
+            .map_err(|e| AuthError::MalformedPubkey(format!("pgp parse: {e}")))?;
+        let primary = &cert.primary_key;
+        let pubkey_bytes: [u8; 32] = match primary.public_params() {
+            PublicParams::Ed25519(p) => *p.key.as_bytes(),
+            PublicParams::EdDSALegacy(_) => {
+                // Legacy EdDSA-on-curve25519 stored as a curve25519 MPI; rpgp
+                // already exposes the parsed VerifyingKey via the params struct
+                // but the type is private — extract via debug formatting.
+                // Pragmatic: ask the caller to use the modern Ed25519 (RFC 9580)
+                // packet form. Most tooling has migrated.
+                return Err(AuthError::MalformedPubkey(
+                    "legacy EdDSA cert; please re-export with RFC 9580 Ed25519 packet"
+                        .into(),
+                ));
+            }
+            other => {
+                return Err(AuthError::MalformedPubkey(format!(
+                    "unsupported primary key algorithm; need Ed25519, got {other:?}"
+                )));
+            }
+        };
+        let fp_hex = hex::encode(primary.fingerprint().as_bytes());
+        self.add(&fp_hex, &pubkey_bytes)?;
+        Ok(fp_hex)
+    }
 }
 
 /// In-memory nonce cache for replay protection.

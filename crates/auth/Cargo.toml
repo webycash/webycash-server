@@ -8,6 +8,12 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+# Enable OpenPGP V4 cert parsing via the pgp (rpgp) crate. With this off,
+# IssuerRegistry only accepts raw 32-byte Ed25519 verifying keys.
+openpgp = ["dep:pgp"]
+
 [dependencies]
 webycash-asset-core = { workspace = true }
 serde = { workspace = true }
@@ -18,4 +24,6 @@ ed25519-dalek = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
-# rpgp added in M3 (issuer signature verification path)
+# Pure-Rust OpenPGP. WASM-friendly. Used to parse V4 certs and extract
+# their primary Ed25519 verifying key + fingerprint.
+pgp = { version = "0.19", optional = true }
