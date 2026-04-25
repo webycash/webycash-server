@@ -1,0 +1,28 @@
+{
+  "captured_at": "2026-04-25T14:07:03Z",
+  "request": {
+    "method": "POST",
+    "url": "https://webcash.org/api/v1/health_check",
+    "headers": {
+      "User-Agent": "webycash-conformance-harness/0.1",
+      "Content-Type": "application/json"
+    },
+    "body_raw": "not json at all"
+  },
+  "response": {
+    "status": 500,
+    "headers": {
+      "Content-Type": "text/html; charset=UTF-8",
+      "Content-Length": "93",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "x-requested-with",
+      "Access-Control-Allow-Methods": "POST, GET, OPTIONS"
+    },
+    "body_raw": "<html><title>500: Internal Server Error</title><body>500: Internal Server Error</body></html>"
+  },
+  "notes": [
+    "Malformed JSON returns 500 with bare HTML body, NOT a JSON envelope.",
+    "Note absence of Strict-Transport-Security header on this 500 response — it's set on success responses but not on this Tornado-default 500.",
+    "Our new server can either match this exactly (Tornado-style HTML 500) or improve to a JSON envelope; M1 must decide and document."
+  ]
+}

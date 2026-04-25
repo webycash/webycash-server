@@ -1,0 +1,32 @@
+{
+  "captured_at": "2026-04-25T14:07:02Z",
+  "request": {
+    "method": "POST",
+    "url": "https://webcash.org/api/v1/replace",
+    "headers": {
+      "User-Agent": "webycash-conformance-harness/0.1",
+      "Content-Type": "application/json"
+    },
+    "body_raw": "{\"webcashes\":[],\"new_webcashes\":[],\"legalese\":{\"terms\":true}}"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "text/html; charset=UTF-8",
+      "Content-Length": "21",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "x-requested-with",
+      "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+      "Strict-Transport-Security": "max-age=15768000"
+    },
+    "body_raw": "{\"status\": \"success\"}",
+    "body_parsed": {
+      "status": "success"
+    }
+  },
+  "notes": [
+    "Replace with empty input AND empty output arrays succeeds trivially. Likely unintended but observed; conformance must preserve.",
+    "Replace request shape: {webcashes: [...], new_webcashes: [...], legalese: {terms: bool}}. legalese.terms must be true for non-trivial requests.",
+    "On success, response body is exactly '{\"status\": \"success\"}' (with the space after colon)."
+  ]
+}

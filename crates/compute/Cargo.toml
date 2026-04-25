@@ -1,0 +1,17 @@
+[package]
+name = "webycash-compute"
+description = "ComputeBackend trait + CPU/CUDA/wgpu implementations for SHA256 batches and PoW verification"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+# CUDA/wgpu deps re-introduced when we migrate from crates/server in M1.

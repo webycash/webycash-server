@@ -1,0 +1,15 @@
+[package]
+name = "webycash-aluvm-runtime"
+description = "AluVM execution context shared by asset-rgb (server) and the wallet-rgb crate (webylib). Native + WASM symmetry."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+hex = { workspace = true }
+# aluvm-sdk + strict_types pulled in during M3 after WASM viability gate.

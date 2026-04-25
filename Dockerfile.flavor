@@ -1,0 +1,34 @@
+# webycash-server flavor Dockerfile
+#
+# Builds one of the three asset-gated server binaries from the workspace.
+#
+# Usage:
+#   docker build --build-arg FLAVOR=webcash -t webycash/server-webcash -f Dockerfile.flavor .
+#   docker build --build-arg FLAVOR=rgb     -t webycash/server-rgb     -f Dockerfile.flavor .
+#   docker build --build-arg FLAVOR=voucher -t webycash/server-voucher -f Dockerfile.flavor .
+#
+# FLAVOR must be one of: webcash, rgb, voucher.
+
+ARG FLAVOR=webcash
+
+# ── Build stage ─────────────────────────────────────────────────────
+
+FROM rust:1.85-alpine AS build
+ARG FLAVOR
+RUN apk add --no-cache musl-dev pkgconfig openssl-dev openssl-libs-static
+WORKDIR /app
+COPY . .
+RUN cargo build --release --bin webycash-server-${FLAVOR} && \
+    strip target/release/webycash-server-${FLAVOR} && \
+    cp target/release/webycash-server-${FLAVOR} /server
+
+# ── Runtime stage ───────────────────────────────────────────────────
+
+FROM alpine:3.21
+ARG FLAVOR
+RUN apk add --no-cache ca-certificates
+COPY --from=build /server /usr/local/bin/server
+COPY config/ /etc/webycash/
+EXPOSE 8080
+ENV WEBYCASH_FLAVOR=${FLAVOR}
+ENTRYPOINT ["server"]

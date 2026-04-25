@@ -1,0 +1,21 @@
+[package]
+name = "webycash-asset-rgb"
+description = "Asset implementation for RGB (RGB20 fungible/splittable, RGB21 NFT/non-splittable). Issuer-namespaced. Uses official LNP/BP + UBIDECO crates."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+webycash-asset-core = { workspace = true }
+webycash-proto = { workspace = true }
+webycash-aluvm-runtime = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+nom = { workspace = true }
+thiserror = { workspace = true }
+# RGB ecosystem deps land in M3, after WASM viability is verified:
+# rgb-core, rgb-std, rgb-schemata, aluvm-sdk, strict_types, bp-core

@@ -1,0 +1,19 @@
+[package]
+name = "webycash-mining"
+description = "Mining configuration (Disabled/Fixed/Dynamic), difficulty adjustment, subsidy ratios, mining-state actor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+webycash-asset-core = { workspace = true }
+webycash-compute = { workspace = true }
+serde = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+ractor = { workspace = true }
+tokio = { workspace = true }

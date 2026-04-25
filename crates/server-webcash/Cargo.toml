@@ -1,0 +1,21 @@
+[package]
+name = "webycash-server-webcash"
+description = "Webcash flavor of the asset-gated server. Wire-protocol frozen against webcash.org production."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "webycash-server-webcash"
+path = "src/main.rs"
+
+[dependencies]
+webycash-server-core = { workspace = true }
+webycash-asset-webcash = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }

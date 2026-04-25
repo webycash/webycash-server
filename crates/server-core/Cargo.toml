@@ -1,0 +1,33 @@
+[package]
+name = "webycash-server-core"
+description = "Generic Server<A: Asset> — hyper service stack, middleware, endpoint dispatch, replace/transfer/mint flows. The asset-flavor binaries instantiate this with a concrete A."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+webycash-asset-core = { workspace = true }
+webycash-proto = { workspace = true }
+webycash-storage = { workspace = true }
+webycash-compute = { workspace = true }
+webycash-mining = { workspace = true }
+webycash-auth = { workspace = true }
+webycash-macros = { workspace = true }
+
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http = { workspace = true }
+http-body-util = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+ractor = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }

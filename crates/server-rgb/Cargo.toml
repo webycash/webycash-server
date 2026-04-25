@@ -1,0 +1,21 @@
+[package]
+name = "webycash-server-rgb"
+description = "RGB flavor of the asset-gated server. Issuer-namespaced, AluVM-validated, supports RGB20 (splittable) and RGB21 (non-splittable)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "webycash-server-rgb"
+path = "src/main.rs"
+
+[dependencies]
+webycash-server-core = { workspace = true }
+webycash-asset-rgb = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }

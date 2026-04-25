@@ -1,0 +1,21 @@
+[package]
+name = "webycash-server-voucher"
+description = "Voucher flavor of the asset-gated server. Always-splittable, issuer-namespaced bearer credits."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "webycash-server-voucher"
+path = "src/main.rs"
+
+[dependencies]
+webycash-server-core = { workspace = true }
+webycash-asset-voucher = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }

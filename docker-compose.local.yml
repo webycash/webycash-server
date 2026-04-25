@@ -1,0 +1,115 @@
+# Local development + integration topology.
+#
+# Boots all three asset-gated server flavors (webcash, rgb, voucher) each
+# bound to its own port and backed by its own Redis instance. The webylib
+# wallet integration tests target this compose for end-to-end coverage of
+# every flavor.
+#
+# Usage:
+#   docker compose -f docker-compose.local.yml up --build
+#
+# Ports (host:container):
+#   server-webcash → :8181
+#   server-rgb     → :8182
+#   server-voucher → :8183
+#   redis-webcash  → :6391
+#   redis-rgb      → :6392
+#   redis-voucher  → :6393
+#
+# The bench-oriented docker-compose.yml (3-redis, 3-server, FDB, DynamoDB
+# Local) stays untouched — it's for throughput, not flavor coverage.
+
+services:
+  redis-webcash: &redis
+    image: redis:7-alpine
+    command: >
+      redis-server --port 6379
+      --io-threads 4 --io-threads-do-reads yes
+      --save "" --appendonly no
+      --loglevel warning
+    networks: [local]
+
+  redis-rgb:
+    <<: *redis
+    networks: [local]
+
+  redis-voucher:
+    <<: *redis
+    networks: [local]
+
+  server-webcash:
+    build:
+      context: .
+      dockerfile: Dockerfile.flavor
+      args:
+        FLAVOR: webcash
+    image: webycash/server-webcash:dev
+    environment:
+      WEBCASH_MODE: testnet
+      WEBCASH_DB_BACKEND: redis
+      REDIS_URL: redis://redis-webcash:6379
+      WEBCASH_BIND_ADDR: 0.0.0.0:8080
+      WEBYCASH_MINING_MODE: fixed
+      WEBYCASH_INITIAL_DIFFICULTY: "1"
+      RUST_LOG: webycash_server_webcash=info,webycash_server_core=info
+    ports: ["8181:8080"]
+    depends_on: [redis-webcash]
+    networks: [local]
+
+  server-rgb:
+    build:
+      context: .
+      dockerfile: Dockerfile.flavor
+      args:
+        FLAVOR: rgb
+    image: webycash/server-rgb:dev
+    environment:
+      WEBCASH_MODE: testnet
+      WEBCASH_DB_BACKEND: redis
+      REDIS_URL: redis://redis-rgb:6379
+      WEBCASH_BIND_ADDR: 0.0.0.0:8080
+      WEBYCASH_MINING_MODE: dynamic
+      WEBYCASH_INITIAL_DIFFICULTY: "1"
+      WEBYCASH_MINING_REQUIRED_FOR_ISSUANCE: "false"
+      RUST_LOG: webycash_server_rgb=info,webycash_server_core=info
+    ports: ["8182:8080"]
+    depends_on: [redis-rgb]
+    networks: [local]
+
+  server-voucher:
+    build:
+      context: .
+      dockerfile: Dockerfile.flavor
+      args:
+        FLAVOR: voucher
+    image: webycash/server-voucher:dev
+    environment:
+      WEBCASH_MODE: testnet
+      WEBCASH_DB_BACKEND: redis
+      REDIS_URL: redis://redis-voucher:6379
+      WEBCASH_BIND_ADDR: 0.0.0.0:8080
+      WEBYCASH_MINING_MODE: dynamic
+      WEBYCASH_INITIAL_DIFFICULTY: "1"
+      WEBYCASH_MINING_REQUIRED_FOR_ISSUANCE: "false"
+      RUST_LOG: webycash_server_voucher=info,webycash_server_core=info
+    ports: ["8183:8080"]
+    depends_on: [redis-voucher]
+    networks: [local]
+
+  # External Redis access for ad-hoc CLI inspection
+  redis-webcash-ext:
+    <<: *redis
+    ports: ["6391:6379"]
+    networks: [local]
+  redis-rgb-ext:
+    <<: *redis
+    ports: ["6392:6379"]
+    networks: [local]
+  redis-voucher-ext:
+    <<: *redis
+    ports: ["6393:6379"]
+    networks: [local]
+
+networks:
+  local:
+    driver: bridge
