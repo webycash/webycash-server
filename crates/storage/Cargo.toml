@@ -24,6 +24,7 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 hex = { workspace = true }
+uuid = { workspace = true }
 
 redis = { workspace = true, optional = true }
 aws-config = { workspace = true, optional = true }

@@ -15,3 +15,6 @@ hex = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 # CUDA/wgpu deps re-introduced when we migrate from crates/server in M1.
+
+[dev-dependencies]
+tokio = { workspace = true }

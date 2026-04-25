@@ -12,22 +12,15 @@
 //! | `/api/v1/mining_report`        | `MintableAsset`                                |
 //! | `/api/v1/issue`                | `IssuedAsset + MintableAsset`                  |
 //! | `/api/v1/issuer/{fp}/stats`    | `IssuedAsset`                                  |
-//!
-//! Trait bodies are intentionally empty in M0 — concrete impls live in the
-//! per-asset crates and arrive in M1 (Webcash), M3 (RGB), M5 (Voucher).
 
 #![forbid(unsafe_code)]
 
+pub mod amount;
+
+pub use amount::{Amount, AmountError};
+
 use serde::{Deserialize, Serialize};
 use std::fmt;
-
-/// Atomic-unit token amount. 8-decimal-place fixed point, identical to
-/// Webcash's "wats" representation. Stored as i64 internally; `Display`
-/// emits the human-readable decimal form (e.g., `"1.00000000"`).
-///
-/// Concrete impl lives in M1; this is a marker stub.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct Amount(pub i64);
 
 /// Hex-encoded OpenPGP V4 fingerprint (20 bytes / 40 lowercase hex chars) of
 /// an issuer's Ed25519 cert. Used in `IssuedAsset` wire formats and as part
@@ -39,7 +32,9 @@ impl PgpFingerprint {
     /// Lowercase hex bytes, no spaces. Returns an error for non-hex / wrong-length input.
     /// Real validation lands in `webycash-auth` (M3).
     pub fn parse(_s: &str) -> Result<Self> {
-        Err(AssetError::Unimplemented("PgpFingerprint::parse — lands in M3"))
+        Err(AssetError::Unimplemented(
+            "PgpFingerprint::parse — lands in M3",
+        ))
     }
 }
 
@@ -70,6 +65,8 @@ pub enum AssetError {
     Parse(String),
     #[error("invariant violated: {0}")]
     Invariant(String),
+    #[error("amount error: {0}")]
+    Amount(#[from] AmountError),
     #[error("unimplemented: {0}")]
     Unimplemented(&'static str),
 }
@@ -85,6 +82,8 @@ pub type Result<T> = std::result::Result<T, AssetError>;
 /// applicable.
 pub trait AssetSecret: Send + Sync + fmt::Debug + Clone + 'static {
     fn wire_form(&self) -> String;
+    /// The bare hex secret value (without prefix/amount/issuer/contract).
+    fn secret_hex(&self) -> &str;
 }
 
 /// Marker for a parsed `:public:` token.
