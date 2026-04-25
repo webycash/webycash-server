@@ -1,8 +1,9 @@
 //! Voucher flavor binary.
 //!
-//! Boots `Server<Voucher, RedisStore<Voucher, NamespacedKeys>>`. Vouchers
-//! are always-splittable bearer credits, issuer-namespaced by
-//! `(contract_id, issuer_fp)`. Endpoints match the RGB fungible binary.
+//! Boots `Server<Voucher, S>` where `S` is selected at runtime from
+//! `WEBCASH_DB_BACKEND` ∈ {redis, dynamodb, fdb (feature-gated),
+//! redis_fdb (feature-gated)}. Vouchers are always-splittable bearer
+//! credits, issuer-namespaced by `(contract_id, issuer_fp)`.
 
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -13,6 +14,11 @@ use webycash_asset_voucher::Voucher;
 use webycash_auth::IssuerRegistry;
 use webycash_mining::{MiningConfig, MiningMode};
 use webycash_server_core::{serve_issued, ServeConfig, Server};
+#[cfg(feature = "fdb")]
+use webycash_storage::fdb_backend::FdbStore;
+#[cfg(all(feature = "redis", feature = "fdb"))]
+use webycash_storage::redis_fdb_backend::RedisFdbStore;
+use webycash_storage::dynamodb_backend::DynamoDbStore;
 use webycash_storage::redis_backend::RedisStore;
 use webycash_storage::NamespacedKeys;
 
@@ -27,8 +33,7 @@ async fn main() -> anyhow::Result<()> {
 
     let bind = std::env::var("WEBCASH_BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
     let mode = std::env::var("WEBCASH_MODE").unwrap_or_else(|_| "testnet".to_string());
-    let redis_url =
-        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    let db_backend = std::env::var("WEBCASH_DB_BACKEND").unwrap_or_else(|_| "redis".to_string());
 
     let mut mining = MiningConfig {
         mode: match mode.as_str() {
@@ -50,38 +55,93 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("WEBCASH_BIND_ADDR is not a valid socket address: {bind}"))?;
     let cfg = ServeConfig { bind_addr, mining };
 
-    let store = RedisStore::<Voucher, _>::new(&redis_url, NamespacedKeys)
-        .await
-        .with_context(|| format!("connecting to Redis at {redis_url}"))?;
-
-    // Issuer registry from env. Format: WEBYCASH_ISSUERS=fp1:hex_pubkey1,fp2:hex_pubkey2
     let mut issuers = IssuerRegistry::new();
     if let Ok(raw) = std::env::var("WEBYCASH_ISSUERS") {
         for entry in raw.split(',').filter(|s| !s.is_empty()) {
-            let (fp, pk_hex) = entry.split_once(':').context(
-                "WEBYCASH_ISSUERS entries must be `fp:hex_pubkey` (40-hex fingerprint, 64-hex key)",
-            )?;
+            let (fp, pk_hex) = entry
+                .split_once(':')
+                .context("WEBYCASH_ISSUERS entries must be `fp:hex_pubkey`")?;
             issuers
                 .add_hex(fp, pk_hex)
                 .with_context(|| format!("registering issuer {fp}"))?;
             tracing::info!(issuer = fp, "registered");
         }
     }
-    let server = Server::new(cfg, store);
-    let server = if issuers.is_empty() {
-        tracing::warn!("no issuers configured; /api/v1/issue will reject all requests");
-        server
-    } else {
-        tracing::info!(count = issuers.len(), "issuer registry loaded");
-        server.with_issuers(issuers)
-    };
 
     tracing::info!(
         asset = "voucher",
         %bind,
         %mode,
-        %redis_url,
+        backend = %db_backend,
         "server-voucher booting"
     );
-    serve_issued(server).await
+
+    macro_rules! finish {
+        ($store:expr) => {{
+            let server = Server::new(cfg, $store);
+            let server = if issuers.is_empty() {
+                tracing::warn!("no issuers configured; /api/v1/issue will reject all requests");
+                server
+            } else {
+                tracing::info!(count = issuers.len(), "issuer registry loaded");
+                server.with_issuers(issuers)
+            };
+            serve_issued(server).await
+        }};
+    }
+
+    match db_backend.as_str() {
+        "redis" => {
+            let redis_url = std::env::var("REDIS_URL")
+                .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+            let store = RedisStore::<Voucher, _>::new(&redis_url, NamespacedKeys)
+                .await
+                .with_context(|| format!("connecting to Redis at {redis_url}"))?;
+            finish!(store)
+        }
+        "dynamodb" => {
+            let aws_config =
+                aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
+            let mut sdk_builder = aws_sdk_dynamodb::config::Builder::from(&aws_config);
+            if let Ok(endpoint) = std::env::var("DYNAMODB_ENDPOINT") {
+                sdk_builder = sdk_builder.endpoint_url(endpoint);
+            }
+            let client = aws_sdk_dynamodb::Client::from_conf(sdk_builder.build());
+            let store = DynamoDbStore::<Voucher, _>::new(client, NamespacedKeys);
+            store.ensure_tables().await.context("ensure_tables on DynamoDB")?;
+            finish!(store)
+        }
+        #[cfg(feature = "fdb")]
+        "fdb" => {
+            let network = unsafe { ::foundationdb::boot() };
+            std::mem::forget(network);
+            let cluster_file = std::env::var("FDB_CLUSTER_FILE").ok();
+            let store = FdbStore::<Voucher, _>::new(cluster_file.as_deref(), NamespacedKeys)
+                .context("opening FoundationDB")?;
+            finish!(store)
+        }
+        #[cfg(all(feature = "redis", feature = "fdb"))]
+        "redis_fdb" => {
+            let network = unsafe { ::foundationdb::boot() };
+            std::mem::forget(network);
+            let redis_url = std::env::var("REDIS_URL")
+                .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+            let cluster_file = std::env::var("FDB_CLUSTER_FILE").ok();
+            let store = RedisFdbStore::<Voucher, _>::new(
+                &redis_url,
+                cluster_file.as_deref(),
+                NamespacedKeys,
+            )
+            .await
+            .context("opening Redis+FDB composite")?;
+            finish!(store)
+        }
+        #[cfg(not(feature = "fdb"))]
+        "fdb" | "redis_fdb" => anyhow::bail!(
+            "WEBCASH_DB_BACKEND={db_backend} requires the `fdb` cargo feature"
+        ),
+        other => anyhow::bail!(
+            "unknown WEBCASH_DB_BACKEND: {other}"
+        ),
+    }
 }

@@ -16,6 +16,10 @@ use tracing_subscriber::EnvFilter;
 use webycash_asset_webcash::Webcash;
 use webycash_mining::{MiningConfig, MiningMode};
 use webycash_server_core::{serve, ServeConfig, Server};
+#[cfg(feature = "fdb")]
+use webycash_storage::fdb_backend::FdbStore;
+#[cfg(all(feature = "redis", feature = "fdb"))]
+use webycash_storage::redis_fdb_backend::RedisFdbStore;
 use webycash_storage::dynamodb_backend::DynamoDbStore;
 use webycash_storage::redis_backend::RedisStore;
 use webycash_storage::WebcashLegacyKeys;
@@ -82,8 +86,39 @@ async fn main() -> anyhow::Result<()> {
                 .context("ensure_tables on DynamoDB")?;
             serve(Server::new(cfg, store)).await
         }
+        #[cfg(feature = "fdb")]
+        "fdb" => {
+            // Caller is responsible for foundationdb::boot() before this point.
+            let network = unsafe { ::foundationdb::boot() };
+            std::mem::forget(network);
+            let cluster_file = std::env::var("FDB_CLUSTER_FILE").ok();
+            let store = FdbStore::<Webcash, _>::new(cluster_file.as_deref(), WebcashLegacyKeys)
+                .context("opening FoundationDB")?;
+            serve(Server::new(cfg, store)).await
+        }
+        #[cfg(all(feature = "redis", feature = "fdb"))]
+        "redis_fdb" => {
+            let network = unsafe { ::foundationdb::boot() };
+            std::mem::forget(network);
+            let redis_url = std::env::var("REDIS_URL")
+                .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+            let cluster_file = std::env::var("FDB_CLUSTER_FILE").ok();
+            let store = RedisFdbStore::<Webcash, _>::new(
+                &redis_url,
+                cluster_file.as_deref(),
+                WebcashLegacyKeys,
+            )
+            .await
+            .context("opening Redis+FDB composite")?;
+            serve(Server::new(cfg, store)).await
+        }
+        #[cfg(not(feature = "fdb"))]
+        "fdb" | "redis_fdb" => anyhow::bail!(
+            "WEBCASH_DB_BACKEND={db_backend} requires the `fdb` cargo feature; \
+             rebuild with `cargo build --features fdb` (FoundationDB C client must be installed)"
+        ),
         other => anyhow::bail!(
-            "unknown WEBCASH_DB_BACKEND: {other} (must be `redis` or `dynamodb`)"
+            "unknown WEBCASH_DB_BACKEND: {other} (must be `redis`, `dynamodb`, `fdb`, or `redis_fdb`)"
         ),
     }
 }
