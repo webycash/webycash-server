@@ -16,28 +16,84 @@ mod token;
 
 pub use token::{PublicWebcash, SecretWebcash, TokenError};
 
+use std::collections::HashMap;
+
 use webycash_asset_core::{
     Amount, Asset, AssetRecord, AssetSecret, AssetPublic, MintableAsset, Result as AssetResult,
     SplittableAsset,
 };
 
 /// In-DB record for a Webcash token. Mirrors the legacy
-/// `webycash_server::db::TokenRecord`. Migrated in M1.
-#[derive(Debug, Clone)]
+/// `webycash_server::db::TokenRecord` field-for-field so the new generic
+/// storage layer can write the same Redis HASH shape and stay compatible
+/// with deployed testnet data.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WebcashRecord {
     pub public_hash: String,
     pub amount_wats: i64,
     pub spent: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub spent_at: Option<chrono::DateTime<chrono::Utc>>,
     pub origin: WebcashOrigin,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum WebcashOrigin {
     Mined,
     Replaced,
 }
 
 impl AssetRecord for WebcashRecord {}
+
+/// Webcash uses the historical Redis HASH field layout for backwards
+/// compatibility with deployed testnet data.
+impl webycash_storage::HashRecord for WebcashRecord {
+    fn public_hash(&self) -> &str {
+        &self.public_hash
+    }
+
+    fn amount_wats(&self) -> i64 {
+        self.amount_wats
+    }
+
+    fn to_fields(&self, fields: &mut HashMap<String, String>) {
+        fields.insert("amount_wats".into(), self.amount_wats.to_string());
+        fields.insert("spent".into(), if self.spent { "1".into() } else { "0".into() });
+        fields.insert("created_at".into(), self.created_at.to_rfc3339());
+        if let Some(ts) = self.spent_at {
+            fields.insert("spent_at".into(), ts.to_rfc3339());
+        }
+        fields.insert(
+            "origin".into(),
+            match self.origin {
+                WebcashOrigin::Mined => "mined".into(),
+                WebcashOrigin::Replaced => "replaced".into(),
+            },
+        );
+    }
+
+    fn from_fields(public_hash: &str, fields: &HashMap<String, String>) -> Option<Self> {
+        Some(WebcashRecord {
+            public_hash: public_hash.to_string(),
+            amount_wats: fields.get("amount_wats")?.parse().ok()?,
+            spent: fields.get("spent").map(|s| s == "1").unwrap_or(false),
+            created_at: fields
+                .get("created_at")
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|d| d.with_timezone(&chrono::Utc))
+                .unwrap_or_else(chrono::Utc::now),
+            spent_at: fields
+                .get("spent_at")
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|d| d.with_timezone(&chrono::Utc)),
+            origin: match fields.get("origin").map(|s| s.as_str()) {
+                Some("replaced") => WebcashOrigin::Replaced,
+                _ => WebcashOrigin::Mined,
+            },
+        })
+    }
+}
 
 /// Issuance context for Webcash: the PoW preimage submitted to
 /// `/api/v1/mining_report`. Verified against the current difficulty target.

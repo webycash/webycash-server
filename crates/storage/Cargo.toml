@@ -31,3 +31,6 @@ aws-config = { workspace = true, optional = true }
 aws-sdk-dynamodb = { workspace = true, optional = true }
 serde_dynamo = { workspace = true, optional = true }
 foundationdb = { workspace = true, optional = true }
+
+futures = { workspace = true }
+tracing = { workspace = true }

@@ -11,7 +11,7 @@ repository.workspace = true
 [dependencies]
 webycash-asset-core = { workspace = true }
 webycash-proto = { workspace = true }
-webycash-storage = { workspace = true }
+webycash-storage = { workspace = true, features = ["redis"] }
 webycash-compute = { workspace = true }
 webycash-mining = { workspace = true }
 webycash-auth = { workspace = true }

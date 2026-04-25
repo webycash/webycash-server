@@ -6,15 +6,15 @@
 //! emitted match the legacy `token:{public_hash}` shape — preserving testnet
 //! Redis schema compatibility.
 //!
-//! Concrete backend impls (Redis/DynamoDB/FoundationDB/Redis+FDB) are
-//! migrated from `crates/server/src/db/` during M1.D when `server-core`
-//! comes up. This crate currently ships:
-//!   - the generic `LedgerStore<A>` trait
-//!   - shared record/op/result types
-//!   - a `KeyStrategy` trait + Webcash legacy specialization
+//! Available backends (cargo features):
+//!   - `redis`     → `redis_backend::RedisStore<A, K>`
+//!   - `dynamodb`  → planned in M1.D follow-up
+//!   - `fdb`       → planned in M1.D follow-up
+//!   - `redis-fdb` → composite, planned
 
 #![forbid(unsafe_code)]
 
+use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use async_trait::async_trait;
@@ -22,11 +22,13 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use webycash_asset_core::{Asset, ContractId, IssuedAsset, PgpFingerprint};
 
+#[cfg(feature = "redis")]
+pub mod redis_backend;
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Audit + stats record types (shared across all asset flavors)
+// Audit + stats record types
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Audit record for a replacement (transfer).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplacementRecord {
     pub id: String,
@@ -36,7 +38,6 @@ pub struct ReplacementRecord {
     pub created_at: DateTime<Utc>,
 }
 
-/// Audit record for a burn.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BurnRecord {
     pub id: String,
@@ -45,9 +46,6 @@ pub struct BurnRecord {
     pub burned_at: DateTime<Utc>,
 }
 
-/// Economy statistics, derived from mining state. Shape is
-/// asset-flavor-uniform; specific values come from per-flavor mining
-/// configs.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EconomyStats {
     pub total_circulation_wats: i64,
@@ -58,9 +56,6 @@ pub struct EconomyStats {
     pub subsidy_amount_wats: i64,
 }
 
-/// Mining state — current difficulty/epoch/circulation. Source of truth
-/// for `EconomyStats`. Lives in storage so all flavors share the schema;
-/// the difficulty-adjustment algorithms in `webycash-mining` mutate it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MiningState {
     pub total_circulation_wats: i64,
@@ -73,7 +68,6 @@ pub struct MiningState {
     pub aggregate_work: u64,
 }
 
-/// One replace operation in a batch. Generic over the per-asset record.
 #[derive(Debug, Clone)]
 pub struct ReplaceOp<R> {
     pub inputs: Vec<String>,
@@ -81,11 +75,30 @@ pub struct ReplaceOp<R> {
     pub record: ReplacementRecord,
 }
 
-/// Result of a single replace operation within a batch.
 #[derive(Debug)]
 pub enum ReplaceResult {
     Ok,
     Failed(String),
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HashRecord — codec between asset records and Redis HASH field maps.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A record that can be stored as a Redis HASH (or DynamoDB attribute map).
+///
+/// Each backend can pick a serialization strategy: HASH fields (preserves
+/// legacy webcash testnet compat), JSON in a single field, or strict-types
+/// for RGB. Webcash uses the legacy field-per-field layout.
+pub trait HashRecord: Sized + Send + Sync {
+    fn public_hash(&self) -> &str;
+    fn amount_wats(&self) -> i64;
+
+    /// Write fields into a backend-neutral string map.
+    fn to_fields(&self, fields: &mut HashMap<String, String>);
+
+    /// Reconstruct from a backend-neutral string map keyed by public hash.
+    fn from_fields(public_hash: &str, fields: &HashMap<String, String>) -> Option<Self>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -94,48 +107,36 @@ pub enum ReplaceResult {
 
 #[async_trait]
 pub trait LedgerStore<A: Asset>: Send + Sync + 'static {
-    /// Insert tokens. Each must have a unique hash within its namespace —
-    /// duplicates fail. Backend pipelines all inserts in minimal round-trips.
     async fn insert_tokens(&self, records: &[A::Record]) -> anyhow::Result<()>;
 
-    /// Look up tokens by public hash within a namespace. Returns in same
-    /// order as input. Backend pipelines lookups.
     async fn get_tokens(
         &self,
         ns: &Namespace,
         hashes: &[String],
     ) -> anyhow::Result<Vec<Option<A::Record>>>;
 
-    /// Check spent status for multiple tokens.
-    /// Returns (hash, Option<bool>) in same order: None = not found.
     async fn check_tokens(
         &self,
         ns: &Namespace,
         hashes: &[String],
     ) -> anyhow::Result<Vec<(String, Option<bool>)>>;
 
-    /// Execute a batch of atomic replace operations within the same
-    /// namespace. Each op independently succeeds or fails.
     async fn batch_replace(
         &self,
         ns: &Namespace,
         ops: &[ReplaceOp<A::Record>],
     ) -> Vec<ReplaceResult>;
 
-    /// Burn multiple tokens within a namespace.
     async fn batch_burn(
         &self,
         ns: &Namespace,
         ops: &[(String, BurnRecord)],
     ) -> anyhow::Result<()>;
 
-    /// Get current mining state (per asset).
     async fn get_mining_state(&self) -> anyhow::Result<Option<MiningState>>;
 
-    /// Update mining state (per asset).
     async fn update_mining_state(&self, state: &MiningState) -> anyhow::Result<()>;
 
-    /// Get economy statistics. Default: derived from mining state.
     async fn get_stats(&self) -> anyhow::Result<EconomyStats> {
         Ok(self
             .get_mining_state()
@@ -153,13 +154,9 @@ pub trait LedgerStore<A: Asset>: Send + Sync + 'static {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Namespacing: (contract_id, issuer_fp). For Webcash both are absent.
+// Namespacing
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Storage namespace identifier.
-///
-/// - `Webcash` flavor uses `Namespace::default()` (no contract, no issuer).
-/// - RGB / Voucher flavors use `Namespace::scoped(contract, issuer)`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Namespace {
     pub contract_id: Option<ContractId>,
@@ -178,7 +175,6 @@ impl Namespace {
     }
 }
 
-/// Helper for `IssuedAsset`s: extract a Namespace from a parsed secret.
 pub fn namespace_for_secret<A>(secret: &A::Secret) -> Namespace
 where
     A: IssuedAsset,
@@ -187,16 +183,9 @@ where
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// KeyStrategy: how a backend turns (asset_name, namespace, hash) into a key.
+// KeyStrategy
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Strategy for serialising a `(asset, namespace, public_hash)` triple into
-/// a backend-native key (Redis HASH name, DynamoDB PK/SK, FDB tuple, etc.).
-///
-/// The Webcash legacy strategy emits `token:{public_hash}` regardless of
-/// asset name, preserving on-disk compatibility with deployed testnet
-/// Redis instances. The general strategy emits
-/// `{asset}:{contract}:{issuer}:token:{hash}`.
 pub trait KeyStrategy: Send + Sync + 'static {
     fn token_key(&self, asset_name: &str, ns: &Namespace, public_hash: &str) -> String;
     fn replacement_key(&self, asset_name: &str, ns: &Namespace, op_id: &str) -> String;
@@ -204,8 +193,6 @@ pub trait KeyStrategy: Send + Sync + 'static {
     fn mining_state_key(&self, asset_name: &str) -> String;
 }
 
-/// Webcash-only key strategy: ignores asset_name and namespace, emits the
-/// legacy keys. Activated when `A: Asset` has `NAME == "webcash"`.
 pub struct WebcashLegacyKeys;
 
 impl KeyStrategy for WebcashLegacyKeys {
@@ -213,18 +200,16 @@ impl KeyStrategy for WebcashLegacyKeys {
         format!("token:{public_hash}")
     }
     fn replacement_key(&self, _asset_name: &str, _ns: &Namespace, op_id: &str) -> String {
-        format!("replacement:{op_id}")
+        format!("audit:replace:{op_id}")
     }
     fn burn_key(&self, _asset_name: &str, _ns: &Namespace, op_id: &str) -> String {
-        format!("burn:{op_id}")
+        format!("audit:burn:{op_id}")
     }
     fn mining_state_key(&self, _asset_name: &str) -> String {
-        "mining_state".to_string()
+        "mining:state".to_string()
     }
 }
 
-/// Asset-namespaced key strategy: includes asset, contract, issuer in keys.
-/// Used by RGB and Voucher.
 pub struct NamespacedKeys;
 
 impl KeyStrategy for NamespacedKeys {
@@ -236,23 +221,18 @@ impl KeyStrategy for NamespacedKeys {
     fn replacement_key(&self, asset_name: &str, ns: &Namespace, op_id: &str) -> String {
         let contract = ns.contract_id.as_ref().map(|c| c.0.as_str()).unwrap_or("_");
         let issuer = ns.issuer_fp.as_ref().map(|i| i.0.as_str()).unwrap_or("_");
-        format!("{asset_name}:{contract}:{issuer}:replacement:{op_id}")
+        format!("{asset_name}:{contract}:{issuer}:audit:replace:{op_id}")
     }
     fn burn_key(&self, asset_name: &str, ns: &Namespace, op_id: &str) -> String {
         let contract = ns.contract_id.as_ref().map(|c| c.0.as_str()).unwrap_or("_");
         let issuer = ns.issuer_fp.as_ref().map(|i| i.0.as_str()).unwrap_or("_");
-        format!("{asset_name}:{contract}:{issuer}:burn:{op_id}")
+        format!("{asset_name}:{contract}:{issuer}:audit:burn:{op_id}")
     }
     fn mining_state_key(&self, asset_name: &str) -> String {
-        format!("{asset_name}:mining_state")
+        format!("{asset_name}:mining:state")
     }
 }
 
-/// Marker pointing each asset at the right key strategy.
-///
-/// Webcash gets `WebcashLegacyKeys` (compat); everything else gets
-/// `NamespacedKeys`. Server flavors instantiate `Backend<A, Self::Keys>`
-/// with the appropriate strategy.
 pub struct Strategy<A>(PhantomData<A>);
 
 #[cfg(test)]
@@ -264,12 +244,9 @@ mod tests {
         let s = WebcashLegacyKeys;
         let ns = Namespace::unscoped();
         assert_eq!(s.token_key("webcash", &ns, "abc"), "token:abc");
-        assert_eq!(
-            s.replacement_key("webcash", &ns, "op1"),
-            "replacement:op1"
-        );
-        assert_eq!(s.burn_key("webcash", &ns, "b1"), "burn:b1");
-        assert_eq!(s.mining_state_key("webcash"), "mining_state");
+        assert_eq!(s.replacement_key("webcash", &ns, "op1"), "audit:replace:op1");
+        assert_eq!(s.burn_key("webcash", &ns, "b1"), "audit:burn:b1");
+        assert_eq!(s.mining_state_key("webcash"), "mining:state");
     }
 
     #[test]
@@ -289,9 +266,6 @@ mod tests {
     fn namespaced_keys_handle_unscoped() {
         let s = NamespacedKeys;
         let ns = Namespace::unscoped();
-        assert_eq!(
-            s.token_key("voucher", &ns, "h1"),
-            "voucher:_:_:token:h1"
-        );
+        assert_eq!(s.token_key("voucher", &ns, "h1"), "voucher:_:_:token:h1");
     }
 }
