@@ -12,4 +12,9 @@ repository.workspace = true
 serde = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }
-# aluvm-sdk + strict_types pulled in during M3 after WASM viability gate.
+# Real AluVM execution. Integrating actual rgb-core schema validation
+# is a multi-week follow-up; this crate currently exposes a working
+# Vm wrapper that loads + executes a CompiledLib and reports its
+# Status. webycash-asset-rgb's validate_transfer hook is wired to
+# call into this once a contract schema is supplied.
+aluvm = "0.12"
