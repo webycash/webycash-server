@@ -19,6 +19,7 @@ members = [
     "crates/server-core",
     "crates/server-webcash",
     "crates/server-rgb",
+    "crates/server-rgb-collectible",
     "crates/server-voucher",
     "crates/conformance",
 ]

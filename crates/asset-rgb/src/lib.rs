@@ -28,9 +28,9 @@ pub use token::{
 use std::collections::HashMap;
 
 use webycash_asset_core::{
-    Amount, Asset, AssetPublic, AssetRecord, AssetSecret, ContractId, IssuedAsset,
-    MintableAsset, PgpFingerprint, RecordBuilder, RecordOrigin, Result as AssetResult,
-    SplittableAsset, TransferableAsset,
+    Amount, Asset, AssetPublic, AssetRecord, AssetSecret, CollectibleRecordBuilder, ContractId,
+    IssuedAsset, MintableAsset, PgpFingerprint, RecordBuilder, RecordOrigin,
+    Result as AssetResult, SplittableAsset, TransferableAsset,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -373,6 +373,32 @@ impl MintableAsset for RgbCollectible {
     }
     fn build_records(ctx: &Self::IssuanceContext) -> AssetResult<Vec<Self::Record>> {
         Ok(ctx.records.clone())
+    }
+}
+
+impl CollectibleRecordBuilder for RgbCollectible {
+    fn record_from_secret(secret: &Self::Secret, origin: RecordOrigin) -> Self::Record {
+        let public = secret.to_public();
+        RgbCollectibleRecord {
+            public_hash: public.hash,
+            spent: false,
+            created_at: chrono::Utc::now(),
+            spent_at: None,
+            origin: match origin {
+                RecordOrigin::Mined => RgbOrigin::Mined,
+                RecordOrigin::Replaced => RgbOrigin::Transferred,
+            },
+            contract_id: secret.contract_id.clone(),
+            issuer_fp: secret.issuer_fp.clone(),
+        }
+    }
+
+    fn namespace_envelope(secret: &Self::Secret) -> Option<(String, String)> {
+        Some((secret.contract_id.0.clone(), secret.issuer_fp.0.clone()))
+    }
+
+    fn public_namespace_envelope(public: &Self::Public) -> Option<(String, String)> {
+        Some((public.contract_id.0.clone(), public.issuer_fp.0.clone()))
     }
 }
 

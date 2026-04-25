@@ -30,8 +30,8 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
 use webycash_asset_core::{
-    Amount, Asset, AssetPublic, AssetSecret, IssuedAsset, MintableAsset, RecordBuilder,
-    RecordOrigin, SplittableAsset,
+    Amount, Asset, AssetPublic, AssetSecret, CollectibleRecordBuilder, IssuedAsset, MintableAsset,
+    RecordBuilder, RecordOrigin, SplittableAsset, TransferableAsset,
 };
 use webycash_auth::{IssuerRegistry, NonceCache};
 use webycash_mining::MiningConfig;
@@ -166,6 +166,73 @@ where
     match (req.method(), req.uri().path()) {
         (&Method::POST, "/api/v1/issue") => handlers::issue::<A, S>(state, req).await,
         _ => route::<A, S>(state, req).await,
+    }
+}
+
+/// Variant for non-splittable / collectible asset flavors (RGB21 NFT).
+/// Exposes a different endpoint set:
+///   GET  /api/v1/target          (MintableAsset; reports difficulty)
+///   POST /api/v1/health_check    (per-token namespace lookup)
+///   POST /api/v1/transfer        (1:1 ownership transfer)
+///   POST /api/v1/burn_collectible
+///   POST /api/v1/issue           (IssuedAsset, signed mint)
+///   GET  /terms, /terms/text
+///
+/// SplittableAsset endpoints (`/replace`, `/mining_report`) are
+/// statically absent because RgbCollectible doesn't implement them.
+pub async fn serve_collectible<A, S>(server: Server<A, S>) -> anyhow::Result<()>
+where
+    A: Asset + MintableAsset + TransferableAsset + IssuedAsset + CollectibleRecordBuilder,
+    A::Record: HashRecord,
+    S: LedgerStore<A>,
+{
+    let addr = server.config.bind_addr;
+    let state = Arc::new(server);
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    tracing::info!(%addr, asset = A::NAME, "listening (collectible flavor)");
+    loop {
+        let (stream, peer) = listener.accept().await?;
+        let state = state.clone();
+        tokio::spawn(async move {
+            let svc = service_fn(move |req: Request<Incoming>| {
+                let state = state.clone();
+                async move {
+                    Ok::<_, Infallible>(route_collectible::<A, S>(&state, req).await)
+                }
+            });
+            let builder = Builder::new(TokioExecutor::new());
+            if let Err(e) = builder.serve_connection(TokioIo::new(stream), svc).await {
+                tracing::warn!(%peer, error = %e, "connection error");
+            }
+        });
+    }
+}
+
+async fn route_collectible<A, S>(
+    state: &Server<A, S>,
+    req: Request<Incoming>,
+) -> Response<Full<Bytes>>
+where
+    A: Asset + MintableAsset + TransferableAsset + IssuedAsset + CollectibleRecordBuilder,
+    A::Record: HashRecord,
+    S: LedgerStore<A>,
+{
+    match (req.method(), req.uri().path()) {
+        (&Method::GET, "/api/v1/target") => handlers::target::<A, S>(state).await,
+        (&Method::GET, "/terms") | (&Method::GET, "/terms/text") => handlers::terms().await,
+        (&Method::POST, "/api/v1/health_check") => {
+            handlers::health_check_collectible::<A, S>(state, req).await
+        }
+        (&Method::POST, "/api/v1/transfer") => {
+            handlers::transfer::<A, S>(state, req).await
+        }
+        (&Method::POST, "/api/v1/burn_collectible") => {
+            handlers::burn_collectible::<A, S>(state, req).await
+        }
+        (&Method::POST, "/api/v1/issue") => {
+            handlers::issue_collectible::<A, S>(state, req).await
+        }
+        _ => not_found(),
     }
 }
 
@@ -805,6 +872,308 @@ mod handlers {
             return server_error(&format!("insert: {e}"));
         }
 
+        ok_text_html_json(r#"{"status": "success"}"#.to_string())
+    }
+
+    /// `POST /api/v1/health_check` — collectible variant. Same contract as
+    /// the splittable handler but uses `CollectibleRecordBuilder` for the
+    /// namespace lookup.
+    pub async fn health_check_collectible<A, S>(
+        state: &Server<A, S>,
+        req: Request<Incoming>,
+    ) -> Response<Full<Bytes>>
+    where
+        A: Asset + TransferableAsset + CollectibleRecordBuilder,
+        A::Record: HashRecord,
+        S: LedgerStore<A>,
+    {
+        let body = match collect_body(req).await {
+            Ok(b) => b,
+            Err(e) => return server_error(&format!("body: {e}")),
+        };
+        let tokens: Vec<String> = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => return server_error(&format!("parse: {e}")),
+        };
+
+        let mut hashes: Vec<String> = Vec::with_capacity(tokens.len());
+        let mut publics: Vec<<A as Asset>::Public> = Vec::with_capacity(tokens.len());
+        for token in &tokens {
+            match A::parse_public(token) {
+                Ok(p) => {
+                    hashes.push(p.public_hash().to_string());
+                    publics.push(p);
+                }
+                Err(_) => return server_error(&format!("invalid token: {token}")),
+            }
+        }
+
+        let mut lookups: Vec<(String, Option<bool>)> =
+            vec![(String::new(), None); hashes.len()];
+        let mut by_ns: std::collections::HashMap<Namespace, Vec<(usize, String)>> =
+            std::collections::HashMap::new();
+        for (idx, (hash, public)) in hashes.iter().zip(publics.iter()).enumerate() {
+            let ns = match A::public_namespace_envelope(public) {
+                Some((c, i)) => Namespace::scoped(ContractId(c), PgpFingerprint(i)),
+                None => Namespace::unscoped(),
+            };
+            by_ns.entry(ns).or_default().push((idx, hash.clone()));
+        }
+        for (ns, items) in by_ns {
+            let bucket: Vec<String> = items.iter().map(|(_, h)| h.clone()).collect();
+            let res = match state.store.check_tokens(&ns, &bucket).await {
+                Ok(r) => r,
+                Err(e) => return server_error(&format!("storage: {e}")),
+            };
+            for ((orig_idx, _), (h, spent)) in items.into_iter().zip(res) {
+                lookups[orig_idx] = (h, spent);
+            }
+        }
+
+        let mut body = String::with_capacity(64 + tokens.len() * 100);
+        body.push_str(r#"{"status": "success", "results": {"#);
+        for (i, ((_, spent), key)) in lookups.iter().zip(tokens.iter()).enumerate() {
+            if i > 0 {
+                body.push_str(", ");
+            }
+            body.push('"');
+            for ch in key.chars() {
+                match ch {
+                    '"' => body.push_str("\\\""),
+                    '\\' => body.push_str("\\\\"),
+                    c => body.push(c),
+                }
+            }
+            body.push_str(r#"": {"spent": "#);
+            match spent {
+                None => body.push_str("null"),
+                Some(true) => body.push_str("true"),
+                Some(false) => body.push_str("false"),
+            }
+            body.push('}');
+        }
+        body.push_str("}}");
+        ok_text_html_json(body)
+    }
+
+    /// `POST /api/v1/transfer`
+    ///
+    /// Non-splittable 1:1 ownership transfer (RGB21 NFT). Body shape:
+    /// ```json
+    /// {
+    ///   "input": "secret:{hex}:{contract}:{issuer}",
+    ///   "output": "secret:{hex}:{contract}:{issuer}",
+    ///   "legalese": {"terms": true}
+    /// }
+    /// ```
+    /// Server enforces same-namespace + atomically marks input spent and
+    /// inserts output. AluVM transition validation hook present (currently
+    /// stubbed via `TransferableAsset::validate_transfer`).
+    pub async fn transfer<A, S>(
+        state: &Server<A, S>,
+        req: Request<Incoming>,
+    ) -> Response<Full<Bytes>>
+    where
+        A: Asset + TransferableAsset + CollectibleRecordBuilder + IssuedAsset,
+        A::Record: HashRecord,
+        S: LedgerStore<A>,
+    {
+        #[derive(serde::Deserialize)]
+        struct TransferBody {
+            input: String,
+            output: String,
+            #[serde(default)]
+            legalese: Option<Legalese>,
+        }
+        let body = match collect_body(req).await {
+            Ok(b) => b,
+            Err(e) => return server_error(&format!("body: {e}")),
+        };
+        let parsed: TransferBody = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => return server_error(&format!("parse: {e}")),
+        };
+        if !parsed.legalese.as_ref().is_some_and(|l| l.terms) {
+            return server_error("legalese.terms must be true");
+        }
+        let input = match A::parse_secret(&parsed.input) {
+            Ok(s) => s,
+            Err(e) => return server_error(&format!("invalid input: {e}")),
+        };
+        let output = match A::parse_secret(&parsed.output) {
+            Ok(s) => s,
+            Err(e) => return server_error(&format!("invalid output: {e}")),
+        };
+        // Same-namespace check via the asset's IssuedAsset impl.
+        if A::issuer(&input) != A::issuer(&output)
+            || A::contract_id(&input) != A::contract_id(&output)
+        {
+            return server_error("namespace mismatch (input/output)");
+        }
+        // AluVM transition validation hook.
+        if let Err(e) = A::validate_transfer(&input, &output) {
+            return server_error(&format!("transition: {e}"));
+        }
+
+        // For RGB21 the "amount" is conceptually 1; conservation is implicit
+        // (1 input → 1 output). Build the storage namespace from the input.
+        let ns = match <A as CollectibleRecordBuilder>::namespace_envelope(&input) {
+            Some((c, i)) => Namespace::scoped(ContractId(c), PgpFingerprint(i)),
+            None => Namespace::unscoped(),
+        };
+        let public = A::to_public(&input);
+        let input_hash = public.public_hash().to_string();
+        let output_record =
+            <A as CollectibleRecordBuilder>::record_from_secret(&output, RecordOrigin::Replaced);
+        let output_hash = output_record.public_hash().to_string();
+        let record = ReplacementRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            input_hashes: vec![input_hash.clone()],
+            output_hashes: vec![output_hash],
+            total_amount_wats: 0, // NFTs have no fungible amount
+            created_at: chrono::Utc::now(),
+        };
+        let op = ReplaceOp {
+            inputs: vec![input_hash],
+            outputs: vec![output_record],
+            record,
+        };
+        let results = state.store.batch_replace(&ns, &[op]).await;
+        match results.into_iter().next() {
+            Some(ReplaceResult::Ok) => ok_text_html_json(r#"{"status": "success"}"#.to_string()),
+            Some(ReplaceResult::Failed(e)) => server_error(&format!("transfer failed: {e}")),
+            None => server_error("no result"),
+        }
+    }
+
+    /// `POST /api/v1/burn_collectible` — same shape as /burn but for non-splittable assets.
+    pub async fn burn_collectible<A, S>(
+        state: &Server<A, S>,
+        req: Request<Incoming>,
+    ) -> Response<Full<Bytes>>
+    where
+        A: Asset + TransferableAsset + CollectibleRecordBuilder,
+        S: LedgerStore<A>,
+    {
+        #[derive(serde::Deserialize)]
+        struct BurnBody {
+            webcash: String,
+            #[serde(default)]
+            legalese: Option<Legalese>,
+        }
+        let body = match collect_body(req).await {
+            Ok(b) => b,
+            Err(e) => return server_error(&format!("body: {e}")),
+        };
+        let parsed: BurnBody = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => return server_error(&format!("parse: {e}")),
+        };
+        if !parsed.legalese.as_ref().is_some_and(|l| l.terms) {
+            return server_error("legalese.terms must be true");
+        }
+        let secret = match A::parse_secret(&parsed.webcash) {
+            Ok(s) => s,
+            Err(e) => return server_error(&format!("invalid token: {e}")),
+        };
+        let public = A::to_public(&secret);
+        let hash = public.public_hash().to_string();
+        let record = BurnRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            public_hash: hash.clone(),
+            amount_wats: 0,
+            burned_at: chrono::Utc::now(),
+        };
+        let ns = match <A as CollectibleRecordBuilder>::namespace_envelope(&secret) {
+            Some((c, i)) => Namespace::scoped(ContractId(c), PgpFingerprint(i)),
+            None => Namespace::unscoped(),
+        };
+        match state.store.batch_burn(&ns, &[(hash, record)]).await {
+            Ok(()) => ok_text_html_json(r#"{"status": "success"}"#.to_string()),
+            Err(e) => server_error(&format!("burn failed: {e}")),
+        }
+    }
+
+    /// `POST /api/v1/issue` — collectible variant. Operator-signed mint.
+    /// Same envelope as the splittable issue but uses
+    /// `CollectibleRecordBuilder` to build records.
+    pub async fn issue_collectible<A, S>(
+        state: &Server<A, S>,
+        req: Request<Incoming>,
+    ) -> Response<Full<Bytes>>
+    where
+        A: Asset + TransferableAsset + CollectibleRecordBuilder + IssuedAsset,
+        A::Record: HashRecord,
+        S: LedgerStore<A>,
+    {
+        let Some(registry) = state.issuers.clone() else {
+            return server_error("issuer registry not configured");
+        };
+        let sig_hex = match req
+            .headers()
+            .get("x-issuer-signature")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+        {
+            Some(s) => s,
+            None => return server_error("missing X-Issuer-Signature header"),
+        };
+        let sig_bytes = match hex::decode(&sig_hex) {
+            Ok(b) => b,
+            Err(e) => return server_error(&format!("signature hex: {e}")),
+        };
+        let body = match collect_body(req).await {
+            Ok(b) => b,
+            Err(e) => return server_error(&format!("body: {e}")),
+        };
+        #[derive(serde::Deserialize)]
+        struct IssueBody {
+            issuer_fp: String,
+            outputs: Vec<String>,
+            nonce: String,
+            #[serde(default)]
+            #[allow(dead_code)]
+            ts: u64,
+            #[serde(default)]
+            legalese: Option<Legalese>,
+        }
+        let parsed: IssueBody = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => return server_error(&format!("parse: {e}")),
+        };
+        if !parsed.legalese.as_ref().is_some_and(|l| l.terms) {
+            return server_error("legalese.terms must be true");
+        }
+        let issuer = webycash_asset_core::PgpFingerprint(parsed.issuer_fp.to_lowercase());
+        if let Err(e) = registry.verify(&issuer, &body, &sig_bytes) {
+            return server_error(&format!("auth: {e}"));
+        }
+        if let Err(e) = state.nonces.check_and_insert(&issuer, &parsed.nonce) {
+            return server_error(&format!("nonce: {e}"));
+        }
+        let mut secrets = Vec::with_capacity(parsed.outputs.len());
+        for token in &parsed.outputs {
+            match A::parse_secret(token) {
+                Ok(s) => {
+                    if A::issuer(&s) != &issuer {
+                        return server_error(
+                            "output issuer fingerprint must match envelope issuer_fp",
+                        );
+                    }
+                    secrets.push(s);
+                }
+                Err(e) => return server_error(&format!("invalid output: {e}")),
+            }
+        }
+        let records: Vec<A::Record> = secrets
+            .iter()
+            .map(|s| {
+                <A as CollectibleRecordBuilder>::record_from_secret(s, RecordOrigin::Replaced)
+            })
+            .collect();
+        if let Err(e) = state.store.insert_tokens(&records).await {
+            return server_error(&format!("insert: {e}"));
+        }
         ok_text_html_json(r#"{"status": "success"}"#.to_string())
     }
 

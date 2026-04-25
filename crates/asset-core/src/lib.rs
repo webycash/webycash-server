@@ -198,3 +198,19 @@ pub trait RecordBuilder: SplittableAsset {
         None
     }
 }
+
+/// Analog of `RecordBuilder` for non-splittable / collectible (NFT) assets.
+/// `RgbCollectible` implements this; the `/transfer` handler uses it.
+pub trait CollectibleRecordBuilder: TransferableAsset {
+    fn record_from_secret(secret: &Self::Secret, origin: RecordOrigin) -> Self::Record;
+
+    /// Returns `(contract_id, issuer_fp)` for a secret. RGB21 always has
+    /// both; default returns `None` for parity with `RecordBuilder`.
+    fn namespace_envelope(_secret: &Self::Secret) -> Option<(String, String)> {
+        None
+    }
+
+    fn public_namespace_envelope(_public: &Self::Public) -> Option<(String, String)> {
+        None
+    }
+}
