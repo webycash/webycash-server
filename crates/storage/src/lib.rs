@@ -24,6 +24,8 @@ use webycash_asset_core::{Asset, ContractId, IssuedAsset, PgpFingerprint};
 
 #[cfg(feature = "redis")]
 pub mod redis_backend;
+#[cfg(feature = "dynamodb")]
+pub mod dynamodb_backend;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Audit + stats record types
