@@ -37,13 +37,19 @@ async fn main() -> anyhow::Result<()> {
     let redis_url =
         std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
 
-    let mining = MiningConfig {
+    let mut mining = MiningConfig {
         mode: match mode.as_str() {
             "production" => MiningMode::webcash_production(),
             _ => MiningMode::webcash_testnet(),
         },
         ..MiningConfig::default()
     };
+    // Optional env override of the difficulty (handy for integration tests).
+    if let Ok(d) = std::env::var("WEBYCASH_DIFFICULTY") {
+        if let Ok(bits) = d.parse::<u32>() {
+            mining.mode = MiningMode::Fixed { difficulty: bits };
+        }
+    }
 
     let bind_addr = SocketAddr::from_str(&bind)
         .with_context(|| format!("WEBCASH_BIND_ADDR is not a valid socket address: {bind}"))?;

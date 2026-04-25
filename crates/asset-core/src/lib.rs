@@ -165,3 +165,20 @@ pub trait MintableAsset: Asset {
     /// Build the records to insert into the ledger upon a successful issuance.
     fn build_records(ctx: &Self::IssuanceContext) -> Result<Vec<Self::Record>>;
 }
+
+/// How a record entered the ledger. Used by `RecordBuilder` to tag inserts.
+#[derive(Debug, Clone, Copy)]
+pub enum RecordOrigin {
+    /// Token was minted via PoW (mining_report endpoint).
+    Mined,
+    /// Token was created by splitting/replacing existing tokens.
+    Replaced,
+}
+
+/// Bridge from a parsed secret to the asset's storage record. Used by the
+/// `/replace` and `/mining_report` handlers in `server-core` to construct
+/// ledger entries without server-core needing to know each asset's record
+/// shape.
+pub trait RecordBuilder: SplittableAsset {
+    fn record_from_secret(secret: &Self::Secret, origin: RecordOrigin) -> Self::Record;
+}

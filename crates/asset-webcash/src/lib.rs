@@ -19,8 +19,8 @@ pub use token::{PublicWebcash, SecretWebcash, TokenError};
 use std::collections::HashMap;
 
 use webycash_asset_core::{
-    Amount, Asset, AssetRecord, AssetSecret, AssetPublic, MintableAsset, Result as AssetResult,
-    SplittableAsset,
+    Amount, Asset, AssetRecord, AssetSecret, AssetPublic, MintableAsset, RecordBuilder,
+    RecordOrigin, Result as AssetResult, SplittableAsset,
 };
 
 /// In-DB record for a Webcash token. Mirrors the legacy
@@ -135,6 +135,25 @@ impl SplittableAsset for Webcash {
     }
     fn amount_public(public: &Self::Public) -> Amount {
         public.amount
+    }
+}
+
+/// Bridge from a parsed `SecretWebcash` to a `WebcashRecord`. Used by the
+/// /replace and /mining_report handlers to construct ledger entries.
+impl RecordBuilder for Webcash {
+    fn record_from_secret(secret: &SecretWebcash, origin: RecordOrigin) -> WebcashRecord {
+        let public = secret.to_public();
+        WebcashRecord {
+            public_hash: public.hash,
+            amount_wats: secret.amount.wats,
+            spent: false,
+            created_at: chrono::Utc::now(),
+            spent_at: None,
+            origin: match origin {
+                RecordOrigin::Mined => WebcashOrigin::Mined,
+                RecordOrigin::Replaced => WebcashOrigin::Replaced,
+            },
+        }
     }
 }
 

@@ -29,10 +29,14 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
-use serde::Deserialize;
-use webycash_asset_core::{Amount, Asset, AssetPublic, MintableAsset, SplittableAsset};
+use webycash_asset_core::{
+    Amount, Asset, AssetPublic, AssetSecret, MintableAsset, RecordBuilder, RecordOrigin,
+    SplittableAsset,
+};
 use webycash_mining::MiningConfig;
-use webycash_storage::{LedgerStore, Namespace};
+use webycash_storage::{
+    BurnRecord, HashRecord, LedgerStore, Namespace, ReplaceOp, ReplaceResult, ReplacementRecord,
+};
 
 const MAX_BODY_BYTES: usize = 1024 * 1024; // 1 MB — matches legacy server
 
@@ -85,7 +89,8 @@ impl<A: Asset, S: LedgerStore<A>> Server<A, S> {
 /// are supported on the same port — matching the existing webycash-server.
 pub async fn serve<A, S>(server: Server<A, S>) -> anyhow::Result<()>
 where
-    A: Asset + MintableAsset + SplittableAsset,
+    A: Asset + MintableAsset + SplittableAsset + RecordBuilder,
+    A::Record: HashRecord,
     S: LedgerStore<A>,
 {
     let addr = server.config.bind_addr;
@@ -111,7 +116,8 @@ where
 
 async fn route<A, S>(state: &Server<A, S>, req: Request<Incoming>) -> Response<Full<Bytes>>
 where
-    A: Asset + MintableAsset + SplittableAsset,
+    A: Asset + MintableAsset + SplittableAsset + RecordBuilder,
+    A::Record: HashRecord,
     S: LedgerStore<A>,
 {
     match (req.method(), req.uri().path()) {
@@ -120,9 +126,15 @@ where
         (&Method::POST, "/api/v1/health_check") => {
             handlers::health_check::<A, S>(state, req).await
         }
+        (&Method::POST, "/api/v1/replace") => handlers::replace::<A, S>(state, req).await,
+        (&Method::POST, "/api/v1/mining_report") => {
+            handlers::mining_report::<A, S>(state, req).await
+        }
+        (&Method::POST, "/api/v1/burn") => handlers::burn::<A, S>(state, req).await,
         _ => not_found(),
     }
 }
+
 
 fn not_found() -> Response<Full<Bytes>> {
     let body = "<html><title>404: Not Found</title><body>404: Not Found</body></html>";
@@ -160,11 +172,26 @@ fn server_error(msg: &str) -> Response<Full<Bytes>> {
 
 async fn collect_body(req: Request<Incoming>) -> Result<Bytes, hyper::Error> {
     let body = req.into_body().collect().await?.to_bytes();
-    if body.len() > MAX_BODY_BYTES {
-        // Production webcash.org returns 500 on oversized bodies; we mirror that.
-        // (The Tornado default behavior, not our extension.)
-    }
+    let _ = MAX_BODY_BYTES;
     Ok(body)
+}
+
+/// Body envelope shared by replace + burn + mining_report.
+/// `legalese.terms` must be `true` for any state-mutating endpoint.
+#[derive(serde::Deserialize)]
+struct LegaleseEnvelope {
+    #[serde(default)]
+    legalese: Option<Legalese>,
+}
+
+#[derive(serde::Deserialize)]
+struct Legalese {
+    #[serde(default)]
+    terms: bool,
+}
+
+fn legalese_accepted(envelope: &LegaleseEnvelope) -> bool {
+    envelope.legalese.as_ref().is_some_and(|l| l.terms)
 }
 
 mod handlers {
@@ -285,6 +312,333 @@ mod handlers {
         }
         body.push_str("}}");
         ok_text_html_json(body)
+    }
+
+    /// `POST /api/v1/replace`
+    ///
+    /// Body shape:
+    /// ```json
+    /// {
+    ///   "webcashes": ["e{amt}:secret:{hex}"],
+    ///   "new_webcashes": ["e{amt}:secret:{hex}"],
+    ///   "legalese": {"terms": true}
+    /// }
+    /// ```
+    /// Production response on success: `{"status": "success"}`.
+    /// Conservation law enforced: sum of input amounts == sum of output amounts.
+    pub async fn replace<A, S>(
+        state: &Server<A, S>,
+        req: Request<Incoming>,
+    ) -> Response<Full<Bytes>>
+    where
+        A: Asset + SplittableAsset + RecordBuilder,
+        A::Record: HashRecord,
+        S: LedgerStore<A>,
+    {
+        #[derive(serde::Deserialize)]
+        struct ReplaceBody {
+            #[serde(default)]
+            webcashes: Vec<String>,
+            #[serde(default)]
+            new_webcashes: Vec<String>,
+            #[serde(default)]
+            legalese: Option<Legalese>,
+        }
+
+        let body = match collect_body(req).await {
+            Ok(b) => b,
+            Err(e) => return server_error(&format!("body: {e}")),
+        };
+        let parsed: ReplaceBody = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => return server_error(&format!("parse: {e}")),
+        };
+
+        if !parsed
+            .legalese
+            .as_ref()
+            .is_some_and(|l| l.terms)
+        {
+            // Production matches: legalese rejection returns 500. We
+            // align with that for now; real production may return 400.
+            return server_error("legalese.terms must be true");
+        }
+
+        // Empty replace is accepted (production quirk preserved).
+        if parsed.webcashes.is_empty() && parsed.new_webcashes.is_empty() {
+            return ok_text_html_json(r#"{"status": "success"}"#.to_string());
+        }
+
+        // Parse + sum inputs (read amounts off the public hash via parse_secret).
+        let mut input_secrets = Vec::with_capacity(parsed.webcashes.len());
+        let mut input_hashes = Vec::with_capacity(parsed.webcashes.len());
+        let mut input_total = Amount::ZERO;
+        for token in &parsed.webcashes {
+            match A::parse_secret(token) {
+                Ok(s) => {
+                    let amt = A::amount(&s);
+                    input_total = match input_total.checked_add(amt) {
+                        Some(t) => t,
+                        None => return server_error("input amount overflow"),
+                    };
+                    let public = A::to_public(&s);
+                    input_hashes.push(public.public_hash().to_string());
+                    input_secrets.push(s);
+                }
+                Err(e) => return server_error(&format!("invalid input token: {e}")),
+            }
+        }
+        // Parse + sum outputs.
+        let mut output_secrets = Vec::with_capacity(parsed.new_webcashes.len());
+        let mut output_total = Amount::ZERO;
+        for token in &parsed.new_webcashes {
+            match A::parse_secret(token) {
+                Ok(s) => {
+                    let amt = A::amount(&s);
+                    output_total = match output_total.checked_add(amt) {
+                        Some(t) => t,
+                        None => return server_error("output amount overflow"),
+                    };
+                    output_secrets.push(s);
+                }
+                Err(e) => return server_error(&format!("invalid output token: {e}")),
+            }
+        }
+        if input_total != output_total {
+            return server_error(&format!(
+                "amount mismatch: inputs={input_total} outputs={output_total}"
+            ));
+        }
+
+        // Build the replace op: outputs become Mined-or-Replaced records.
+        let outputs: Vec<A::Record> = output_secrets
+            .iter()
+            .map(|s| A::record_from_secret(s, RecordOrigin::Replaced))
+            .collect();
+        let output_hashes: Vec<String> = outputs
+            .iter()
+            .map(|r| {
+                r.public_hash().to_string()
+            })
+            .collect();
+        let record = ReplacementRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            input_hashes: input_hashes.clone(),
+            output_hashes: output_hashes.clone(),
+            total_amount_wats: input_total.wats,
+            created_at: chrono::Utc::now(),
+        };
+        let op = ReplaceOp {
+            inputs: input_hashes,
+            outputs,
+            record,
+        };
+        let ns = Namespace::unscoped();
+        let results = state.store.batch_replace(&ns, &[op]).await;
+        match results.into_iter().next() {
+            Some(ReplaceResult::Ok) => ok_text_html_json(r#"{"status": "success"}"#.to_string()),
+            Some(ReplaceResult::Failed(e)) => server_error(&format!("replace failed: {e}")),
+            None => server_error("no result from batch_replace"),
+        }
+    }
+
+    /// `POST /api/v1/mining_report`
+    ///
+    /// Body shape:
+    /// ```json
+    /// {
+    ///   "preimage": "<base64 OR raw JSON>",
+    ///   "legalese": {"terms": true}
+    /// }
+    /// ```
+    /// The preimage decodes to:
+    /// ```json
+    /// {"webcash": ["e{amt}:secret:..."], "subsidy": ["e{amt}:secret:..."],
+    ///  "timestamp": int_or_float, "difficulty": target_bits}
+    /// ```
+    /// Server verifies SHA256(preimage_bytes) has >= difficulty leading zeros,
+    /// inserts the webcash + subsidy outputs as Mined records.
+    pub async fn mining_report<A, S>(
+        state: &Server<A, S>,
+        req: Request<Incoming>,
+    ) -> Response<Full<Bytes>>
+    where
+        A: Asset + MintableAsset + SplittableAsset + RecordBuilder,
+        A::Record: HashRecord,
+        S: LedgerStore<A>,
+    {
+        #[derive(serde::Deserialize)]
+        struct MiningReportBody {
+            preimage: String,
+            #[serde(default)]
+            legalese: Option<Legalese>,
+        }
+        #[derive(serde::Deserialize)]
+        struct MiningPreimage {
+            #[serde(default)]
+            webcash: Vec<String>,
+            #[serde(default)]
+            subsidy: Vec<String>,
+            #[serde(default, deserialize_with = "deserialize_flexible_u64")]
+            #[allow(dead_code)]
+            timestamp: u64,
+            difficulty: u32,
+        }
+
+        let body = match collect_body(req).await {
+            Ok(b) => b,
+            Err(e) => return server_error(&format!("body: {e}")),
+        };
+        let report: MiningReportBody = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => return server_error(&format!("parse: {e}")),
+        };
+        if !report
+            .legalese
+            .as_ref()
+            .is_some_and(|l| l.terms)
+        {
+            return server_error("legalese.terms must be true");
+        }
+
+        let cfg = &state.config.mining;
+        let target_bits = match cfg.current_difficulty() {
+            Some(d) => d,
+            None => return server_error("mining is disabled on this server"),
+        };
+
+        // PoW check — SHA256 of the submitted preimage bytes (raw JSON or base64).
+        if !webycash_mining::verify_pow(&report.preimage, target_bits) {
+            return server_error(&format!(
+                "proof-of-work below target ({target_bits} bits)"
+            ));
+        }
+
+        // Decode preimage: try base64 first (GPU/C++ miner), fallback to raw JSON.
+        let preimage_json = match base64_try_decode(&report.preimage) {
+            Some(s) => s,
+            None => report.preimage.clone(),
+        };
+        let preimage: MiningPreimage = match serde_json::from_str(&preimage_json) {
+            Ok(p) => p,
+            Err(e) => return server_error(&format!("invalid preimage: {e}")),
+        };
+
+        // Parse all webcash + subsidy outputs as MINED records.
+        let mut records: Vec<A::Record> = Vec::with_capacity(
+            preimage.webcash.len() + preimage.subsidy.len(),
+        );
+        for token in preimage.webcash.iter().chain(preimage.subsidy.iter()) {
+            match A::parse_secret(token) {
+                Ok(secret) => {
+                    records.push(A::record_from_secret(&secret, RecordOrigin::Mined));
+                }
+                Err(e) => return server_error(&format!("invalid mined token: {e}")),
+            }
+        }
+
+        if let Err(e) = state.store.insert_tokens(&records).await {
+            return server_error(&format!("insert: {e}"));
+        }
+
+        // Update mining state: increment count, accrue circulation.
+        let mut state_now = state
+            .store
+            .get_mining_state()
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        state_now.mining_reports_count = state_now.mining_reports_count.saturating_add(1);
+        state_now.difficulty_target_bits = target_bits;
+        state_now.mining_amount_wats = cfg.mining_amount_wats;
+        state_now.subsidy_amount_wats = cfg.subsidy_amount_wats;
+        let added: i64 = records
+            .iter()
+            .map(|r| {
+                r.amount_wats()
+            })
+            .sum();
+        state_now.total_circulation_wats = state_now.total_circulation_wats.saturating_add(added);
+        let _ = state.store.update_mining_state(&state_now).await;
+
+        ok_text_html_json(r#"{"status": "success"}"#.to_string())
+    }
+
+    /// `POST /api/v1/burn`
+    ///
+    /// Body shape: `{"webcash": "e{amt}:secret:{hex}", "legalese": {"terms": true}}`.
+    /// Marks the token as spent, records an audit entry.
+    pub async fn burn<A, S>(
+        state: &Server<A, S>,
+        req: Request<Incoming>,
+    ) -> Response<Full<Bytes>>
+    where
+        A: Asset + SplittableAsset,
+        S: LedgerStore<A>,
+    {
+        #[derive(serde::Deserialize)]
+        struct BurnBody {
+            webcash: String,
+            #[serde(default)]
+            legalese: Option<Legalese>,
+        }
+        let body = match collect_body(req).await {
+            Ok(b) => b,
+            Err(e) => return server_error(&format!("body: {e}")),
+        };
+        let parsed: BurnBody = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => return server_error(&format!("parse: {e}")),
+        };
+        if !parsed
+            .legalese
+            .as_ref()
+            .is_some_and(|l| l.terms)
+        {
+            return server_error("legalese.terms must be true");
+        }
+        let secret = match A::parse_secret(&parsed.webcash) {
+            Ok(s) => s,
+            Err(e) => return server_error(&format!("invalid token: {e}")),
+        };
+        let amt = A::amount(&secret).wats;
+        let public = A::to_public(&secret);
+        let hash = public.public_hash().to_string();
+        let record = BurnRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            public_hash: hash.clone(),
+            amount_wats: amt,
+            burned_at: chrono::Utc::now(),
+        };
+        let ns = Namespace::unscoped();
+        match state.store.batch_burn(&ns, &[(hash, record)]).await {
+            Ok(()) => ok_text_html_json(r#"{"status": "success"}"#.to_string()),
+            Err(e) => server_error(&format!("burn failed: {e}")),
+        }
+    }
+}
+
+fn base64_try_decode(s: &str) -> Option<String> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(s.as_bytes())
+        .ok()
+        .and_then(|b| String::from_utf8(b).ok())
+}
+
+fn deserialize_flexible_u64<'de, D>(d: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    let v = serde_json::Value::deserialize(d)?;
+    match v {
+        serde_json::Value::Number(n) => n
+            .as_u64()
+            .or_else(|| n.as_f64().map(|f| f as u64))
+            .ok_or_else(|| serde::de::Error::custom("non-numeric timestamp")),
+        _ => Err(serde::de::Error::custom("timestamp must be a number")),
     }
 }
 
