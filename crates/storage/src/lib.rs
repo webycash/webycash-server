@@ -94,6 +94,13 @@ pub trait HashRecord: Sized + Send + Sync {
     fn public_hash(&self) -> &str;
     fn amount_wats(&self) -> i64;
 
+    /// Returns the storage namespace for this record. Webcash records
+    /// return `Namespace::unscoped()`; RGB and Voucher records return
+    /// `Namespace::scoped(contract_id, issuer_fp)`.
+    fn namespace(&self) -> Namespace {
+        Namespace::unscoped()
+    }
+
     /// Write fields into a backend-neutral string map.
     fn to_fields(&self, fields: &mut HashMap<String, String>);
 

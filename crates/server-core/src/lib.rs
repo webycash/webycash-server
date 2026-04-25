@@ -34,6 +34,7 @@ use webycash_asset_core::{
     SplittableAsset,
 };
 use webycash_mining::MiningConfig;
+use webycash_asset_core::{ContractId, PgpFingerprint};
 use webycash_storage::{
     BurnRecord, HashRecord, LedgerStore, Namespace, ReplaceOp, ReplaceResult, ReplacementRecord,
 };
@@ -245,7 +246,8 @@ mod handlers {
         req: Request<Incoming>,
     ) -> Response<Full<Bytes>>
     where
-        A: Asset,
+        A: Asset + SplittableAsset + RecordBuilder,
+        A::Record: HashRecord,
         S: LedgerStore<A>,
     {
         let body = match collect_body(req).await {
@@ -263,11 +265,13 @@ mod handlers {
         // "e1.00000000:..." — to match production's stripping we rewrite.
         let mut hashes: Vec<String> = Vec::with_capacity(tokens.len());
         let mut canonical: Vec<String> = Vec::with_capacity(tokens.len());
+        let mut publics: Vec<<A as Asset>::Public> = Vec::with_capacity(tokens.len());
         for token in &tokens {
             match A::parse_public(token) {
                 Ok(p) => {
                     hashes.push(p.public_hash().to_string());
                     canonical.push(production_normalize_public(token));
+                    publics.push(p);
                 }
                 Err(_) => {
                     return server_error(&format!("invalid token: {token}"));
@@ -275,11 +279,36 @@ mod handlers {
             }
         }
 
-        let ns = Namespace::unscoped();
-        let lookups = match state.store.check_tokens(&ns, &hashes).await {
-            Ok(l) => l,
-            Err(e) => return server_error(&format!("storage: {e}")),
-        };
+        // Determine namespace per token. For Webcash, all tokens share an
+        // unscoped namespace. For RGB/Voucher, each token carries its own
+        // (contract_id, issuer_fp); we group lookups by namespace so a
+        // single health_check can span multiple compartments.
+        let mut lookups: Vec<(String, Option<bool>)> = Vec::with_capacity(hashes.len());
+        // Build (index, namespace, hash) triples then bucket by namespace.
+        type IndexedHash = (usize, String);
+        let mut by_ns: std::collections::HashMap<Namespace, Vec<IndexedHash>> =
+            std::collections::HashMap::new();
+        for (idx, (hash, public)) in hashes.iter().zip(publics.iter()).enumerate() {
+            let ns = match A::public_namespace_envelope(public) {
+                Some((c, i)) => {
+                    Namespace::scoped(ContractId(c), PgpFingerprint(i))
+                }
+                None => Namespace::unscoped(),
+            };
+            by_ns.entry(ns).or_default().push((idx, hash.clone()));
+        }
+        // Resolve per-bucket; reorder back to input order.
+        lookups.resize(hashes.len(), (String::new(), None));
+        for (ns, items) in by_ns {
+            let bucket_hashes: Vec<String> = items.iter().map(|(_, h)| h.clone()).collect();
+            let res = match state.store.check_tokens(&ns, &bucket_hashes).await {
+                Ok(r) => r,
+                Err(e) => return server_error(&format!("storage: {e}")),
+            };
+            for ((orig_idx, _), (h, spent)) in items.into_iter().zip(res) {
+                lookups[orig_idx] = (h, spent);
+            }
+        }
 
         // Hand-build the JSON to control exact field order: production
         // emits "status" before "results" and preserves input token order
@@ -410,17 +439,33 @@ mod handlers {
             ));
         }
 
-        // Build the replace op: outputs become Mined-or-Replaced records.
+        // Determine namespace from the first input. All inputs/outputs must
+        // share the same (contract_id, issuer_fp). For Webcash, this is
+        // unscoped and the check is a no-op.
+        let ns = match input_secrets.first().and_then(A::namespace_envelope) {
+            Some((c, i)) => Namespace::scoped(ContractId(c), PgpFingerprint(i)),
+            None => Namespace::unscoped(),
+        };
+        // Verify same-namespace invariant on every input + output.
+        for s in input_secrets.iter().chain(output_secrets.iter()) {
+            let secret_ns = match A::namespace_envelope(s) {
+                Some((c, i)) => Namespace::scoped(ContractId(c), PgpFingerprint(i)),
+                None => Namespace::unscoped(),
+            };
+            if secret_ns != ns {
+                return server_error(
+                    "namespace mismatch: all inputs and outputs must share the same (contract_id, issuer_fp)",
+                );
+            }
+        }
+
+        // Build the replace op: outputs become Replaced records.
         let outputs: Vec<A::Record> = output_secrets
             .iter()
             .map(|s| A::record_from_secret(s, RecordOrigin::Replaced))
             .collect();
-        let output_hashes: Vec<String> = outputs
-            .iter()
-            .map(|r| {
-                r.public_hash().to_string()
-            })
-            .collect();
+        let output_hashes: Vec<String> =
+            outputs.iter().map(|r| r.public_hash().to_string()).collect();
         let record = ReplacementRecord {
             id: uuid::Uuid::new_v4().to_string(),
             input_hashes: input_hashes.clone(),
@@ -433,7 +478,6 @@ mod handlers {
             outputs,
             record,
         };
-        let ns = Namespace::unscoped();
         let results = state.store.batch_replace(&ns, &[op]).await;
         match results.into_iter().next() {
             Some(ReplaceResult::Ok) => ok_text_html_json(r#"{"status": "success"}"#.to_string()),
@@ -574,7 +618,7 @@ mod handlers {
         req: Request<Incoming>,
     ) -> Response<Full<Bytes>>
     where
-        A: Asset + SplittableAsset,
+        A: Asset + SplittableAsset + RecordBuilder,
         S: LedgerStore<A>,
     {
         #[derive(serde::Deserialize)]
@@ -611,7 +655,10 @@ mod handlers {
             amount_wats: amt,
             burned_at: chrono::Utc::now(),
         };
-        let ns = Namespace::unscoped();
+        let ns = match A::namespace_envelope(&secret) {
+            Some((c, i)) => Namespace::scoped(ContractId(c), PgpFingerprint(i)),
+            None => Namespace::unscoped(),
+        };
         match state.store.batch_burn(&ns, &[(hash, record)]).await {
             Ok(()) => ok_text_html_json(r#"{"status": "success"}"#.to_string()),
             Err(e) => server_error(&format!("burn failed: {e}")),

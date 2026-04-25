@@ -179,6 +179,22 @@ pub enum RecordOrigin {
 /// `/replace` and `/mining_report` handlers in `server-core` to construct
 /// ledger entries without server-core needing to know each asset's record
 /// shape.
+///
+/// `namespace_envelope` / `public_namespace_envelope` let `IssuedAsset`
+/// flavors (RGB, Voucher) report their `(contract_id, issuer_fp)`
+/// partition. Webcash uses the default (unscoped) implementation.
 pub trait RecordBuilder: SplittableAsset {
     fn record_from_secret(secret: &Self::Secret, origin: RecordOrigin) -> Self::Record;
+
+    /// Returns `(contract_id, issuer_fp)` for a secret, if the asset is
+    /// issuer-namespaced. Default: `None` (Webcash).
+    fn namespace_envelope(_secret: &Self::Secret) -> Option<(String, String)> {
+        None
+    }
+
+    /// Returns `(contract_id, issuer_fp)` for a public token, if the asset
+    /// is issuer-namespaced. Default: `None`.
+    fn public_namespace_envelope(_public: &Self::Public) -> Option<(String, String)> {
+        None
+    }
 }

@@ -15,6 +15,8 @@ path = "src/main.rs"
 [dependencies]
 webycash-server-core = { workspace = true }
 webycash-asset-rgb = { workspace = true }
+webycash-mining = { workspace = true }
+webycash-storage = { workspace = true, features = ["redis"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

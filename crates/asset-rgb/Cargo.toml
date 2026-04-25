@@ -11,11 +11,13 @@ repository.workspace = true
 [dependencies]
 webycash-asset-core = { workspace = true }
 webycash-proto = { workspace = true }
+webycash-storage = { workspace = true }
 webycash-aluvm-runtime = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 nom = { workspace = true }
 thiserror = { workspace = true }
-# RGB ecosystem deps land in M3, after WASM viability is verified:
+chrono = { workspace = true }
 # rgb-core, rgb-std, rgb-schemata, aluvm-sdk, strict_types, bp-core
+# wired in M3 follow-up after the WASM viability gate completes.

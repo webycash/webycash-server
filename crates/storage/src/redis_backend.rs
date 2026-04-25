@@ -128,11 +128,11 @@ where
         let mut conn = self.conn();
         let mut pipe = redis::pipe();
 
-        // HSETNX on amount_wats to detect duplicates, then HSET remaining fields
-        let ns = Namespace::unscoped();
+        // Each record reports its own namespace (Webcash unscoped; RGB / Voucher
+        // scoped on (contract_id, issuer_fp)). Storage keys are derived per record.
         records.iter().for_each(|r| {
             pipe.cmd("HSETNX")
-                .arg(self.keys.token_key(A::NAME, &ns, r.public_hash()))
+                .arg(self.keys.token_key(A::NAME, &r.namespace(), r.public_hash()))
                 .arg("amount_wats")
                 .arg(r.amount_wats().to_string());
         });
@@ -144,7 +144,7 @@ where
                 let mut fields = HashMap::new();
                 r.to_fields(&mut fields);
                 fields.remove("amount_wats");
-                let k = self.keys.token_key(A::NAME, &ns, r.public_hash());
+                let k = self.keys.token_key(A::NAME, &r.namespace(), r.public_hash());
                 let mut cmd = set_pipe.cmd("HSET");
                 cmd.arg(&k);
                 fields.iter().for_each(|(name, value)| {
