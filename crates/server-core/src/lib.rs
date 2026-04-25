@@ -30,9 +30,10 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
 use webycash_asset_core::{
-    Amount, Asset, AssetPublic, AssetSecret, MintableAsset, RecordBuilder, RecordOrigin,
-    SplittableAsset,
+    Amount, Asset, AssetPublic, AssetSecret, IssuedAsset, MintableAsset, RecordBuilder,
+    RecordOrigin, SplittableAsset,
 };
+use webycash_auth::{IssuerRegistry, NonceCache};
 use webycash_mining::MiningConfig;
 use webycash_asset_core::{ContractId, PgpFingerprint};
 use webycash_storage::{
@@ -64,6 +65,11 @@ impl ServeConfig {
 pub struct Server<A: Asset, S: LedgerStore<A>> {
     pub config: ServeConfig,
     pub store: Arc<S>,
+    /// Optional issuer registry. When set, `/api/v1/issue` is enabled and
+    /// validates each request's `X-Issuer-Signature`. Webcash leaves this
+    /// `None`; RGB and Voucher binaries populate it from env-loaded keys.
+    pub issuers: Option<Arc<IssuerRegistry>>,
+    pub nonces: Arc<NonceCache>,
     _ph: PhantomData<A>,
 }
 
@@ -72,22 +78,24 @@ impl<A: Asset, S: LedgerStore<A>> Server<A, S> {
         Self {
             config,
             store: Arc::new(store),
+            issuers: None,
+            nonces: Arc::new(NonceCache::default()),
             _ph: PhantomData,
         }
+    }
+
+    pub fn with_issuers(mut self, issuers: IssuerRegistry) -> Self {
+        self.issuers = Some(Arc::new(issuers));
+        self
     }
 }
 
 /// Bind to `config.bind_addr` and serve hyper requests until cancelled.
 ///
-/// Routes:
-///   - GET  /api/v1/target         → handlers::target (MintableAsset)
-///   - POST /api/v1/health_check   → handlers::health_check
-///   - POST /api/v1/replace        → handlers::replace (SplittableAsset)
-///   - GET  /terms, /terms/text    → handlers::terms
-///   - any                          → 404 (production-shape HTML)
-///
 /// Builds with hyper-util's auto Builder so HTTP/1.1 keep-alive AND HTTP/2
-/// are supported on the same port — matching the existing webycash-server.
+/// are supported on the same port. Handles every Webcash-style endpoint;
+/// `/api/v1/issue` is gated by `Server::issuers.is_some()` and
+/// `A: IssuedAsset` (enforced by the `serve_issued` overload).
 pub async fn serve<A, S>(server: Server<A, S>) -> anyhow::Result<()>
 where
     A: Asset + MintableAsset + SplittableAsset + RecordBuilder,
@@ -115,6 +123,52 @@ where
     }
 }
 
+/// Variant of `serve` for issuer-namespaced asset flavors. Identical
+/// routing plus `POST /api/v1/issue` (Ed25519-signed operator mint).
+/// `Server::issuers` must be populated for `/issue` to accept anything;
+/// otherwise the handler returns 503.
+pub async fn serve_issued<A, S>(server: Server<A, S>) -> anyhow::Result<()>
+where
+    A: Asset + MintableAsset + SplittableAsset + RecordBuilder + IssuedAsset,
+    A::Record: HashRecord,
+    S: LedgerStore<A>,
+{
+    let addr = server.config.bind_addr;
+    let state = Arc::new(server);
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    tracing::info!(%addr, asset = A::NAME, "listening (issued flavor)");
+
+    loop {
+        let (stream, peer) = listener.accept().await?;
+        let state = state.clone();
+        tokio::spawn(async move {
+            let svc = service_fn(move |req: Request<Incoming>| {
+                let state = state.clone();
+                async move { Ok::<_, Infallible>(route_issued::<A, S>(&state, req).await) }
+            });
+            let builder = Builder::new(TokioExecutor::new());
+            if let Err(e) = builder.serve_connection(TokioIo::new(stream), svc).await {
+                tracing::warn!(%peer, error = %e, "connection error");
+            }
+        });
+    }
+}
+
+async fn route_issued<A, S>(
+    state: &Server<A, S>,
+    req: Request<Incoming>,
+) -> Response<Full<Bytes>>
+where
+    A: Asset + MintableAsset + SplittableAsset + RecordBuilder + IssuedAsset,
+    A::Record: HashRecord,
+    S: LedgerStore<A>,
+{
+    match (req.method(), req.uri().path()) {
+        (&Method::POST, "/api/v1/issue") => handlers::issue::<A, S>(state, req).await,
+        _ => route::<A, S>(state, req).await,
+    }
+}
+
 async fn route<A, S>(state: &Server<A, S>, req: Request<Incoming>) -> Response<Full<Bytes>>
 where
     A: Asset + MintableAsset + SplittableAsset + RecordBuilder,
@@ -132,6 +186,7 @@ where
             handlers::mining_report::<A, S>(state, req).await
         }
         (&Method::POST, "/api/v1/burn") => handlers::burn::<A, S>(state, req).await,
+        (&Method::GET, "/api/v1/stats") => handlers::stats::<A, S>(state).await,
         _ => not_found(),
     }
 }
@@ -212,6 +267,31 @@ mod handlers {
             "{{\"difficulty_target_bits\": {difficulty}, \"ratio\": {ratio}, \
              \"mining_amount\": \"{mining}\", \"mining_subsidy_amount\": \"{subsidy}\", \
              \"epoch\": 0}}"
+        );
+        ok_text_html_json(body)
+    }
+
+    /// `GET /api/v1/stats`
+    ///
+    /// Webycash extension (production webcash.org returns 404). Reports
+    /// EconomyStats derived from MiningState.
+    pub async fn stats<A, S>(state: &Server<A, S>) -> Response<Full<Bytes>>
+    where
+        A: Asset + MintableAsset + SplittableAsset + RecordBuilder,
+        A::Record: HashRecord,
+        S: LedgerStore<A>,
+    {
+        let stats = state.store.get_stats().await.unwrap_or_default();
+        let body = format!(
+            "{{\"total_circulation\": \"{}\", \"mining_reports_count\": {}, \
+             \"difficulty_target_bits\": {}, \"epoch\": {}, \
+             \"mining_amount\": \"{}\", \"mining_subsidy_amount\": \"{}\"}}",
+            wats_to_string(stats.total_circulation_wats),
+            stats.mining_reports_count,
+            stats.difficulty_target_bits,
+            stats.epoch,
+            wats_to_string(stats.mining_amount_wats),
+            wats_to_string(stats.subsidy_amount_wats),
         );
         ok_text_html_json(body)
     }
@@ -605,6 +685,125 @@ mod handlers {
             .sum();
         state_now.total_circulation_wats = state_now.total_circulation_wats.saturating_add(added);
         let _ = state.store.update_mining_state(&state_now).await;
+
+        ok_text_html_json(r#"{"status": "success"}"#.to_string())
+    }
+
+    /// `POST /api/v1/issue`
+    ///
+    /// Operator-private mint endpoint for issuer-namespaced asset flavors
+    /// (RGB, Voucher). Body shape:
+    /// ```json
+    /// {
+    ///   "issuer_fp": "<40-hex>",
+    ///   "outputs": ["e{amt}:secret:{hex}:{contract}:{fp}", ...],
+    ///   "nonce": "<unique>",
+    ///   "ts": <unix_seconds>,
+    ///   "legalese": {"terms": true}
+    /// }
+    /// ```
+    /// Header: `X-Issuer-Signature: <hex 64-byte detached Ed25519 sig>`.
+    /// The signature must be over the canonical request body (the JSON
+    /// bytes as received). Server validates against the registered issuer
+    /// pubkey, checks nonce isn't replayed, parses outputs, and inserts
+    /// them as Issued records.
+    pub async fn issue<A, S>(
+        state: &Server<A, S>,
+        req: Request<Incoming>,
+    ) -> Response<Full<Bytes>>
+    where
+        A: Asset + SplittableAsset + RecordBuilder + IssuedAsset,
+        A::Record: HashRecord,
+        S: LedgerStore<A>,
+    {
+        let Some(registry) = state.issuers.clone() else {
+            return server_error("issuer registry not configured");
+        };
+
+        // Pull the signature header BEFORE consuming the body.
+        let sig_hex = match req
+            .headers()
+            .get("x-issuer-signature")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+        {
+            Some(s) => s,
+            None => return server_error("missing X-Issuer-Signature header"),
+        };
+        let sig_bytes = match hex::decode(&sig_hex) {
+            Ok(b) => b,
+            Err(e) => return server_error(&format!("signature hex: {e}")),
+        };
+
+        let body = match collect_body(req).await {
+            Ok(b) => b,
+            Err(e) => return server_error(&format!("body: {e}")),
+        };
+
+        #[derive(serde::Deserialize)]
+        struct IssueBody {
+            issuer_fp: String,
+            outputs: Vec<String>,
+            nonce: String,
+            #[serde(default)]
+            #[allow(dead_code)]
+            ts: u64,
+            #[serde(default)]
+            legalese: Option<Legalese>,
+        }
+        let parsed: IssueBody = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => return server_error(&format!("parse: {e}")),
+        };
+        if !parsed.legalese.as_ref().is_some_and(|l| l.terms) {
+            return server_error("legalese.terms must be true");
+        }
+
+        let issuer = webycash_asset_core::PgpFingerprint(parsed.issuer_fp.to_lowercase());
+        if let Err(e) = registry.verify(&issuer, &body, &sig_bytes) {
+            return server_error(&format!("auth: {e}"));
+        }
+        if let Err(e) = state.nonces.check_and_insert(&issuer, &parsed.nonce) {
+            return server_error(&format!("nonce: {e}"));
+        }
+
+        // Parse outputs, verify each lives in the SAME (contract_id, issuer_fp)
+        // namespace as the request envelope.
+        let mut secrets = Vec::with_capacity(parsed.outputs.len());
+        for token in &parsed.outputs {
+            match A::parse_secret(token) {
+                Ok(s) => {
+                    let parsed_issuer = A::issuer(&s);
+                    if parsed_issuer != &issuer {
+                        return server_error(
+                            "output issuer fingerprint must match envelope issuer_fp",
+                        );
+                    }
+                    secrets.push(s);
+                }
+                Err(e) => return server_error(&format!("invalid output: {e}")),
+            }
+        }
+        // All outputs must share the same contract_id (envelope-level invariant).
+        if let Some(first) = secrets.first() {
+            let contract = A::contract_id(first).clone();
+            for s in &secrets[1..] {
+                if A::contract_id(s) != &contract {
+                    return server_error("all outputs must share one contract_id");
+                }
+            }
+        }
+
+        // Build records; tag origin as Replaced (we don't have an Issued
+        // RecordOrigin variant currently — voucher/RGB asset crates can
+        // distinguish via a follow-up).
+        let records: Vec<A::Record> = secrets
+            .iter()
+            .map(|s| A::record_from_secret(s, RecordOrigin::Replaced))
+            .collect();
+        if let Err(e) = state.store.insert_tokens(&records).await {
+            return server_error(&format!("insert: {e}"));
+        }
 
         ok_text_html_json(r#"{"status": "success"}"#.to_string())
     }

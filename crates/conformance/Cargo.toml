@@ -26,3 +26,5 @@ proptest = { workspace = true }
 tokio = { workspace = true }
 sha2 = { workspace = true }
 serde_json = { workspace = true }
+ed25519-dalek = { workspace = true }
+hex = { workspace = true }

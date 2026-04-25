@@ -16,6 +16,7 @@ webycash-compute = { workspace = true }
 webycash-mining = { workspace = true }
 webycash-auth = { workspace = true }
 webycash-macros = { workspace = true }
+ed25519-dalek = { workspace = true }
 
 hyper = { workspace = true }
 hyper-util = { workspace = true }

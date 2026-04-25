@@ -23,8 +23,9 @@ use std::str::FromStr;
 use anyhow::Context;
 use tracing_subscriber::EnvFilter;
 use webycash_asset_rgb::RgbFungible;
+use webycash_auth::IssuerRegistry;
 use webycash_mining::{MiningConfig, MiningMode};
-use webycash_server_core::{serve, ServeConfig, Server};
+use webycash_server_core::{serve_issued, ServeConfig, Server};
 use webycash_storage::redis_backend::RedisStore;
 use webycash_storage::NamespacedKeys;
 
@@ -66,7 +67,26 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("connecting to Redis at {redis_url}"))?;
 
+    let mut issuers = IssuerRegistry::new();
+    if let Ok(raw) = std::env::var("WEBYCASH_ISSUERS") {
+        for entry in raw.split(',').filter(|s| !s.is_empty()) {
+            let (fp, pk_hex) = entry.split_once(':').context(
+                "WEBYCASH_ISSUERS entries must be `fp:hex_pubkey`",
+            )?;
+            issuers
+                .add_hex(fp, pk_hex)
+                .with_context(|| format!("registering issuer {fp}"))?;
+            tracing::info!(issuer = fp, "registered");
+        }
+    }
     let server = Server::new(cfg, store);
+    let server = if issuers.is_empty() {
+        tracing::warn!("no issuers configured; /api/v1/issue will reject all requests");
+        server
+    } else {
+        tracing::info!(count = issuers.len(), "issuer registry loaded");
+        server.with_issuers(issuers)
+    };
 
     tracing::info!(
         asset = "rgb-fungible",
@@ -75,5 +95,5 @@ async fn main() -> anyhow::Result<()> {
         %redis_url,
         "server-rgb booting"
     );
-    serve(server).await
+    serve_issued(server).await
 }
