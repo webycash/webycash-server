@@ -16,7 +16,12 @@ webycash-compute = { workspace = true }
 webycash-mining = { workspace = true }
 webycash-auth = { workspace = true }
 webycash-macros = { workspace = true }
+webycash-aluvm-runtime = { workspace = true }
 ed25519-dalek = { workspace = true }
+aluvm = "0.12"
+
+[dev-dependencies]
+webycash-asset-webcash = { workspace = true }
 
 hyper = { workspace = true }
 hyper-util = { workspace = true }

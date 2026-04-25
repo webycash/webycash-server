@@ -61,6 +61,35 @@ impl ServeConfig {
     }
 }
 
+/// Per-contract AluVM library registry. Maps a `contract_id` (string) to a
+/// compiled AluVM library + entry offset; when /transfer or /replace is
+/// invoked, the server looks up the contract and runs its validation
+/// transition through the AluVM runtime. Operators that want
+/// state-of-the-art transition validation register schemas at boot.
+#[derive(Default)]
+pub struct ContractRegistry {
+    libs: std::collections::HashMap<String, (aluvm::Lib, u16)>,
+}
+
+impl ContractRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// Register a contract's compiled AluVM library + entry offset.
+    pub fn register(&mut self, contract_id: impl Into<String>, lib: aluvm::Lib, entry: u16) {
+        self.libs.insert(contract_id.into(), (lib, entry));
+    }
+    pub fn lookup(&self, contract_id: &str) -> Option<&(aluvm::Lib, u16)> {
+        self.libs.get(contract_id)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.libs.is_empty()
+    }
+    pub fn len(&self) -> usize {
+        self.libs.len()
+    }
+}
+
 /// Server<A, S>: typed handle to a running asset-flavor server.
 pub struct Server<A: Asset, S: LedgerStore<A>> {
     pub config: ServeConfig,
@@ -70,6 +99,12 @@ pub struct Server<A: Asset, S: LedgerStore<A>> {
     /// `None`; RGB and Voucher binaries populate it from env-loaded keys.
     pub issuers: Option<Arc<IssuerRegistry>>,
     pub nonces: Arc<NonceCache>,
+    /// Optional per-contract AluVM library registry. When set, the
+    /// /transfer and /replace handlers run the registered library's
+    /// transition validation before mutating state. Default-permit when
+    /// no registry is supplied (backwards-compatible).
+    pub contracts: Option<Arc<ContractRegistry>>,
+    pub aluvm: webycash_aluvm_runtime::Runtime,
     _ph: PhantomData<A>,
 }
 
@@ -80,6 +115,8 @@ impl<A: Asset, S: LedgerStore<A>> Server<A, S> {
             store: Arc::new(store),
             issuers: None,
             nonces: Arc::new(NonceCache::default()),
+            contracts: None,
+            aluvm: webycash_aluvm_runtime::Runtime::new(),
             _ph: PhantomData,
         }
     }
@@ -87,6 +124,152 @@ impl<A: Asset, S: LedgerStore<A>> Server<A, S> {
     pub fn with_issuers(mut self, issuers: IssuerRegistry) -> Self {
         self.issuers = Some(Arc::new(issuers));
         self
+    }
+
+    /// Register an AluVM contract registry. When set, the server runs
+    /// transition validation through the registered library on every
+    /// /transfer (and /replace, for issued assets).
+    pub fn with_contracts(mut self, contracts: ContractRegistry) -> Self {
+        self.contracts = Some(Arc::new(contracts));
+        self
+    }
+
+    /// Run the registered contract's AluVM transition validator (if any).
+    /// Default-permit when no registry is configured or no library matches.
+    pub fn validate_transition(&self, contract_id: &str) -> Result<(), String> {
+        let Some(registry) = self.contracts.as_ref() else {
+            return Ok(());
+        };
+        let Some((lib, entry)) = registry.lookup(contract_id) else {
+            return Ok(());
+        };
+        self.aluvm
+            .execute_lib(lib, *entry, Some(100_000))
+            .map_err(|e| format!("AluVM rejected: {e}"))
+    }
+}
+
+#[cfg(test)]
+mod aluvm_hook_tests {
+    use super::*;
+    use aluvm::{aluasm, isa::Instr, CompiledLib, LibId};
+    use webycash_asset_webcash::Webcash;
+
+    extern crate alloc;
+
+    /// Build the testing Server<Webcash, _> against a stub Redis-style
+    /// store. We don't run any HTTP endpoints in this test — just the
+    /// validate_transition hook.
+    fn test_server(contracts: Option<ContractRegistry>) -> Server<Webcash, NoopStore> {
+        let cfg = ServeConfig::testnet_default();
+        let server = Server::new(cfg, NoopStore);
+        match contracts {
+            Some(c) => server.with_contracts(c),
+            None => server,
+        }
+    }
+
+    /// Minimal Store impl so we can construct a Server. The validate_transition
+    /// path doesn't touch the store.
+    struct NoopStore;
+    #[async_trait::async_trait]
+    impl LedgerStore<Webcash> for NoopStore {
+        async fn insert_tokens(
+            &self,
+            _records: &[<Webcash as Asset>::Record],
+        ) -> anyhow::Result<()> {
+            unreachable!()
+        }
+        async fn get_tokens(
+            &self,
+            _ns: &Namespace,
+            _hashes: &[String],
+        ) -> anyhow::Result<Vec<Option<<Webcash as Asset>::Record>>> {
+            unreachable!()
+        }
+        async fn check_tokens(
+            &self,
+            _ns: &Namespace,
+            _hashes: &[String],
+        ) -> anyhow::Result<Vec<(String, Option<bool>)>> {
+            unreachable!()
+        }
+        async fn batch_replace(
+            &self,
+            _ns: &Namespace,
+            _ops: &[ReplaceOp<<Webcash as Asset>::Record>],
+        ) -> Vec<ReplaceResult> {
+            unreachable!()
+        }
+        async fn batch_burn(
+            &self,
+            _ns: &Namespace,
+            _ops: &[(String, BurnRecord)],
+        ) -> anyhow::Result<()> {
+            unreachable!()
+        }
+        async fn get_mining_state(
+            &self,
+        ) -> anyhow::Result<Option<webycash_storage::MiningState>> {
+            Ok(None)
+        }
+        async fn update_mining_state(
+            &self,
+            _state: &webycash_storage::MiningState,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn always_ok_lib() -> aluvm::Lib {
+        let code: Vec<Instr<LibId>> = aluasm! {
+           routine MAIN:
+            stop;
+        };
+        CompiledLib::compile(code, &[]).unwrap().into_lib()
+    }
+
+    fn always_fail_lib() -> aluvm::Lib {
+        let code: Vec<Instr<LibId>> = aluasm! {
+           routine MAIN:
+            fail CK;
+            chk CK;
+            stop;
+        };
+        CompiledLib::compile(code, &[]).unwrap().into_lib()
+    }
+
+    #[test]
+    fn no_registry_permits_everything() {
+        let server = test_server(None);
+        // Any contract id passes when no registry exists.
+        assert!(server.validate_transition("anything").is_ok());
+    }
+
+    #[test]
+    fn unregistered_contract_id_permits() {
+        let mut reg = ContractRegistry::new();
+        reg.register("rgb20-usdc", always_ok_lib(), 0);
+        let server = test_server(Some(reg));
+        // A different contract id has no library → default-permit.
+        assert!(server.validate_transition("rgb20-eurt").is_ok());
+    }
+
+    #[test]
+    fn registered_ok_lib_accepts() {
+        let mut reg = ContractRegistry::new();
+        reg.register("rgb20-usdc", always_ok_lib(), 0);
+        let server = test_server(Some(reg));
+        assert!(server.validate_transition("rgb20-usdc").is_ok());
+    }
+
+    #[test]
+    fn registered_fail_lib_rejects() {
+        let mut reg = ContractRegistry::new();
+        reg.register("rgb21-broken", always_fail_lib(), 0);
+        let server = test_server(Some(reg));
+        let err = server.validate_transition("rgb21-broken").unwrap_err();
+        assert!(err.contains("AluVM rejected"), "expected reject: {err}");
     }
 }
 
@@ -1010,8 +1193,15 @@ mod handlers {
         {
             return server_error("namespace mismatch (input/output)");
         }
-        // AluVM transition validation hook.
+        // AluVM transition validation: type-level passthrough check.
         if let Err(e) = A::validate_transfer(&input, &output) {
+            return server_error(&format!("transition: {e}"));
+        }
+        // Server-side contract registry: if the operator has registered a
+        // compiled AluVM library for this contract_id, run the transition
+        // through it and reject on failure. Default-permit otherwise.
+        let contract_id_str = A::contract_id(&input).0.clone();
+        if let Err(e) = state.validate_transition(&contract_id_str) {
             return server_error(&format!("transition: {e}"));
         }
 
