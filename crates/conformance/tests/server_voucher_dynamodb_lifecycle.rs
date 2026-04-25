@@ -36,9 +36,19 @@ fn voucher_lifecycle_against_dynamodb_local() {
         .status()
         .expect("ddb run");
     let ddb_url = format!("http://127.0.0.1:{ddb_port}");
-    if !await_tcp("127.0.0.1", ddb_port, Duration::from_secs(30)) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(40);
+    let mut ready = false;
+    while std::time::Instant::now() < deadline {
+        if std::net::TcpStream::connect(("127.0.0.1", ddb_port)).is_ok() {
+            if probe(&ddb_url).is_ok() {
+                ready = true;
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    if !ready {
         let _ = stop(&ddb_name);
-        eprintln!("ddb not ready");
         return;
     }
 
@@ -225,6 +235,17 @@ fn await_tcp(host: &str, port: u16, max: Duration) -> bool {
         std::thread::sleep(Duration::from_millis(100));
     }
     false
+}
+fn probe(url: &str) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+    let after = url.strip_prefix("http://").unwrap_or(url);
+    let host_port = after.split('/').next().unwrap_or(after);
+    let mut s = std::net::TcpStream::connect(host_port)?;
+    s.set_read_timeout(Some(Duration::from_secs(2)))?;
+    s.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")?;
+    let mut buf = [0u8; 64];
+    let _ = s.read(&mut buf)?;
+    Ok(())
 }
 fn post(url: &str, body: &str) -> std::io::Result<(u16, String)> {
     use std::io::{Read, Write};

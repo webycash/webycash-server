@@ -1,0 +1,11 @@
+target/
+.git/
+.github/
+.DS_Store
+*.md
+deploy/
+terraform/
+docker-compose*.yml
+Dockerfile.bench
+benches/
+.gitignore
