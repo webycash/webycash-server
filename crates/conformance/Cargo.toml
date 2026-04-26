@@ -31,3 +31,7 @@ hex = { workspace = true }
 pgp = "0.19"
 rand = "0.8"
 tempfile = "3"
+webycash-asset-core = { workspace = true }
+webycash-asset-webcash = { workspace = true }
+webycash-asset-rgb = { workspace = true }
+webycash-asset-voucher = { workspace = true }

@@ -94,18 +94,24 @@ pub enum TokenError {
 impl FromStr for SecretVoucher {
     type Err = TokenError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_secret_voucher(s)
-            .map(|(_, v)| v)
-            .map_err(|_| TokenError::InvalidFormat(s.to_string()))
+        let err = || TokenError::InvalidFormat(s.to_string());
+        let (rest, v) = parse_secret_voucher(s).map_err(|_| err())?;
+        if !rest.is_empty() {
+            return Err(err());
+        }
+        Ok(v)
     }
 }
 
 impl FromStr for PublicVoucher {
     type Err = TokenError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_public_voucher(s)
-            .map(|(_, v)| v)
-            .map_err(|_| TokenError::InvalidFormat(s.to_string()))
+        let err = || TokenError::InvalidFormat(s.to_string());
+        let (rest, v) = parse_public_voucher(s).map_err(|_| err())?;
+        if !rest.is_empty() {
+            return Err(err());
+        }
+        Ok(v)
     }
 }
 

@@ -90,18 +90,24 @@ impl fmt::Display for PublicFungible {
 impl FromStr for SecretFungible {
     type Err = TokenError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_secret_fungible(s)
-            .map(|(_, v)| v)
-            .map_err(|_| TokenError::InvalidFormat(s.to_string()))
+        let err = || TokenError::InvalidFormat(s.to_string());
+        let (rest, v) = parse_secret_fungible(s).map_err(|_| err())?;
+        if !rest.is_empty() {
+            return Err(err());
+        }
+        Ok(v)
     }
 }
 
 impl FromStr for PublicFungible {
     type Err = TokenError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_public_fungible(s)
-            .map(|(_, v)| v)
-            .map_err(|_| TokenError::InvalidFormat(s.to_string()))
+        let err = || TokenError::InvalidFormat(s.to_string());
+        let (rest, v) = parse_public_fungible(s).map_err(|_| err())?;
+        if !rest.is_empty() {
+            return Err(err());
+        }
+        Ok(v)
     }
 }
 
@@ -166,18 +172,24 @@ impl fmt::Display for PublicCollectible {
 impl FromStr for SecretCollectible {
     type Err = TokenError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_secret_collectible(s)
-            .map(|(_, v)| v)
-            .map_err(|_| TokenError::InvalidFormat(s.to_string()))
+        let err = || TokenError::InvalidFormat(s.to_string());
+        let (rest, v) = parse_secret_collectible(s).map_err(|_| err())?;
+        if !rest.is_empty() {
+            return Err(err());
+        }
+        Ok(v)
     }
 }
 
 impl FromStr for PublicCollectible {
     type Err = TokenError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_public_collectible(s)
-            .map(|(_, v)| v)
-            .map_err(|_| TokenError::InvalidFormat(s.to_string()))
+        let err = || TokenError::InvalidFormat(s.to_string());
+        let (rest, v) = parse_public_collectible(s).map_err(|_| err())?;
+        if !rest.is_empty() {
+            return Err(err());
+        }
+        Ok(v)
     }
 }
 

@@ -70,18 +70,24 @@ impl fmt::Display for PublicWebcash {
 impl FromStr for SecretWebcash {
     type Err = TokenError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_secret_webcash(s)
-            .map(|(_, wc)| wc)
-            .map_err(|_| TokenError::InvalidFormat(s.to_string()))
+        let err = || TokenError::InvalidFormat(s.to_string());
+        let (rest, wc) = parse_secret_webcash(s).map_err(|_| err())?;
+        if !rest.is_empty() {
+            return Err(err());
+        }
+        Ok(wc)
     }
 }
 
 impl FromStr for PublicWebcash {
     type Err = TokenError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_public_webcash(s)
-            .map(|(_, wc)| wc)
-            .map_err(|_| TokenError::InvalidFormat(s.to_string()))
+        let err = || TokenError::InvalidFormat(s.to_string());
+        let (rest, wc) = parse_public_webcash(s).map_err(|_| err())?;
+        if !rest.is_empty() {
+            return Err(err());
+        }
+        Ok(wc)
     }
 }
 
