@@ -44,6 +44,21 @@ impl SecretWebcash {
         }
     }
 
+    /// Parse a Webcash secret from its canonical wire form
+    /// `e{amount}:secret:{64-hex-chars}`.
+    ///
+    /// ```
+    /// use webycash_asset_webcash::SecretWebcash;
+    /// let s = SecretWebcash::parse(
+    ///     "e1.0:secret:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    /// ).unwrap();
+    /// assert_eq!(s.amount.to_string(), "1.00000000");
+    /// // The parser requires EOF — trailing namespace bytes are rejected
+    /// // (catches the "namespaced token silently parses as plain webcash" bug).
+    /// assert!(SecretWebcash::parse(
+    ///     "e1.0:secret:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:contract:fp"
+    /// ).is_err());
+    /// ```
     pub fn parse(s: &str) -> Result<Self, TokenError> {
         Self::from_str(s)
     }

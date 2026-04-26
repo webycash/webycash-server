@@ -56,6 +56,21 @@ impl SecretFungible {
             issuer_fp: self.issuer_fp.clone(),
         }
     }
+
+    /// Parse an RGB20 fungible secret from its wire form:
+    /// `e{amount}:secret:{64-hex}:{contract_id}:{issuer_fp}`.
+    ///
+    /// ```
+    /// use webycash_asset_rgb::SecretFungible;
+    /// let token = format!(
+    ///     "e10.0:secret:{}:rgb20-usdc:{}",
+    ///     "a".repeat(64),
+    ///     "aabbccddeeff00112233445566778899aabbccdd",
+    /// );
+    /// let s = SecretFungible::parse(&token).unwrap();
+    /// assert_eq!(s.amount.to_string(), "10.00000000");
+    /// assert_eq!(s.contract_id.0, "rgb20-usdc");
+    /// ```
     pub fn parse(s: &str) -> Result<Self, TokenError> {
         Self::from_str(s)
     }
@@ -138,6 +153,25 @@ impl SecretCollectible {
             issuer_fp: self.issuer_fp.clone(),
         }
     }
+
+    /// Parse an RGB21 collectible secret. Note: NO leading `e{amount}:`
+    /// segment — collectibles are non-splittable and don't carry an
+    /// amount on the wire.
+    ///
+    /// ```
+    /// use webycash_asset_rgb::SecretCollectible;
+    /// let token = format!(
+    ///     "secret:{}:rgb21-art-1:{}",
+    ///     "a".repeat(64),
+    ///     "aabbccddeeff00112233445566778899aabbccdd",
+    /// );
+    /// let s = SecretCollectible::parse(&token).unwrap();
+    /// assert_eq!(s.contract_id.0, "rgb21-art-1");
+    /// // Adding a stray amount segment must fail (catches the
+    /// // wrong-flavor mistake at parse time).
+    /// let with_amount = format!("e1.0:{token}");
+    /// assert!(SecretCollectible::parse(&with_amount).is_err());
+    /// ```
     pub fn parse(s: &str) -> Result<Self, TokenError> {
         Self::from_str(s)
     }

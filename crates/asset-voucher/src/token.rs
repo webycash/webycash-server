@@ -52,6 +52,20 @@ impl SecretVoucher {
         }
     }
 
+    /// Parse a voucher secret from its wire form:
+    /// `e{amount}:secret:{64-hex}:{contract_id}:{issuer_fp}`.
+    ///
+    /// ```
+    /// use webycash_asset_voucher::SecretVoucher;
+    /// let token = format!(
+    ///     "e25.0:secret:{}:credits-q1:{}",
+    ///     "f".repeat(64),
+    ///     "aabbccddeeff00112233445566778899aabbccdd",
+    /// );
+    /// let s = SecretVoucher::parse(&token).unwrap();
+    /// assert_eq!(s.amount.to_string(), "25.00000000");
+    /// assert_eq!(s.contract_id.0, "credits-q1");
+    /// ```
     pub fn parse(s: &str) -> Result<Self, TokenError> {
         Self::from_str(s)
     }
