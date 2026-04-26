@@ -18,6 +18,9 @@ use std::sync::Mutex;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use webycash_asset_core::PgpFingerprint;
 
+/// Failure modes from the auth layer (signature verification + nonce
+/// cache). Surfaced by the server's `/api/v1/issue` handler as a 500
+/// with the underlying message.
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
     #[error("issuer fingerprint not registered: {0}")]
@@ -44,6 +47,9 @@ impl Default for IssuerRegistry {
 }
 
 impl IssuerRegistry {
+    /// Empty registry. Add issuers via `add` (raw bytes), `add_hex`
+    /// (hex-encoded pubkey), or `add_pgp_armored` (full OpenPGP V4
+    /// cert; needs the `openpgp` cargo feature).
     pub fn new() -> Self {
         Self {
             keys: HashMap::new(),
@@ -101,10 +107,12 @@ impl IssuerRegistry {
             .map_err(|_| AuthError::InvalidSignature)
     }
 
+    /// `true` if no issuers have been registered.
     pub fn is_empty(&self) -> bool {
         self.keys.is_empty()
     }
 
+    /// Number of registered issuers.
     pub fn len(&self) -> usize {
         self.keys.len()
     }
@@ -165,6 +173,9 @@ impl Default for NonceCache {
 }
 
 impl NonceCache {
+    /// Bounded LRU. When `seen.len() >= max_size`, the cache clears
+    /// entirely (simplest possible eviction; production deployments
+    /// can swap for a Redis SETEX-backed implementation).
     pub fn with_capacity(max_size: usize) -> Self {
         Self {
             seen: Mutex::new(HashSet::new()),
