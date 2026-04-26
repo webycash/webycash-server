@@ -3,13 +3,16 @@
 //! Five traits compose at compile time to gate which endpoints exist on a
 //! given server flavor binary:
 //!
+//! Server endpoint surface (every flavor uses the SAME endpoints; the
+//! /api/v1/replace handler enforces conservation for splittable
+//! assets and 1:1 arity for transferable ones):
+//!
 //! | Endpoint                       | Required trait bound                           |
 //! |--------------------------------|------------------------------------------------|
 //! | `/api/v1/health_check`         | `Asset`                                        |
 //! | `/api/v1/burn`                 | `Asset`                                        |
-//! | `/api/v1/replace`              | `SplittableAsset` (RGB21 NFT excluded)         |
-//! | `/api/v1/transfer`             | `TransferableAsset`                            |
-//! | `/api/v1/mining_report`        | `MintableAsset`                                |
+//! | `/api/v1/replace`              | `SplittableAsset` OR `TransferableAsset`       |
+//! | `/api/v1/mining_report`        | `MintableAsset` (mining-only — RGB21 absent)   |
 //! | `/api/v1/issue`                | `IssuedAsset + MintableAsset`                  |
 //! | `/api/v1/issuer/{fp}/stats`    | `IssuedAsset`                                  |
 

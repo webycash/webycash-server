@@ -182,16 +182,19 @@ where
 }
 
 /// Variant for non-splittable / collectible asset flavors (RGB21 NFT).
-/// Exposes a different endpoint set:
+/// Exposes the same endpoint surface as the splittable flavors —
+/// every write goes through `/api/v1/replace` — but the handler
+/// enforces a 1:1 arity (single input → single output, same
+/// namespace) instead of a conservation law:
 ///   GET  /api/v1/target          (MintableAsset; reports difficulty)
 ///   POST /api/v1/health_check    (per-token namespace lookup)
-///   POST /api/v1/transfer        (1:1 ownership transfer)
-///   POST /api/v1/burn_collectible
+///   POST /api/v1/replace         (1:1 ownership transfer; arity-checked)
+///   POST /api/v1/burn
 ///   POST /api/v1/issue           (IssuedAsset, signed mint)
 ///   GET  /terms, /terms/text
 ///
-/// SplittableAsset endpoints (`/replace`, `/mining_report`) are
-/// statically absent because RgbCollectible doesn't implement them.
+/// `/api/v1/mining_report` is statically absent because RGB21 can't
+/// be PoW-mined; issuance is operator-signed only.
 pub async fn serve_collectible<A, S>(server: Server<A, S>) -> anyhow::Result<()>
 where
     A: Asset + MintableAsset + TransferableAsset + IssuedAsset + CollectibleRecordBuilder,
