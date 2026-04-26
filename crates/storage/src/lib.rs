@@ -35,6 +35,9 @@ pub mod redis_fdb_backend;
 // Audit + stats record types
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Audit trail entry written every time `/api/v1/replace` succeeds.
+/// Records the input → output hash mapping + the conserved total
+/// amount so an operator can reconstruct the chain of state moves.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplacementRecord {
     pub id: String,
@@ -44,6 +47,9 @@ pub struct ReplacementRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// Audit trail entry written every time `/api/v1/burn` succeeds.
+/// Burns are terminal — the public_hash transitions to spent without
+/// a replacement output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BurnRecord {
     pub id: String,
@@ -52,6 +58,8 @@ pub struct BurnRecord {
     pub burned_at: DateTime<Utc>,
 }
 
+/// Snapshot returned by `/api/v1/stats`. Read-only, derived from
+/// MiningState plus aggregations across the token store.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EconomyStats {
     pub total_circulation_wats: i64,
@@ -62,6 +70,10 @@ pub struct EconomyStats {
     pub subsidy_amount_wats: i64,
 }
 
+/// Persisted mining-economy state: difficulty, epoch boundaries,
+/// per-epoch mining/subsidy targets, accumulated proof-of-work since
+/// genesis. Updated by the mining_report handler under a Lua-script
+/// (Redis) / TransactWriteItem (DynamoDB) atomic.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MiningState {
     pub total_circulation_wats: i64,
@@ -74,6 +86,9 @@ pub struct MiningState {
     pub aggregate_work: u64,
 }
 
+/// Atomic replace request: a batch of input hashes to mark spent +
+/// a batch of output records to insert + the audit envelope.
+/// Backends commit all-or-nothing.
 #[derive(Debug, Clone)]
 pub struct ReplaceOp<R> {
     pub inputs: Vec<String>,
@@ -81,6 +96,8 @@ pub struct ReplaceOp<R> {
     pub record: ReplacementRecord,
 }
 
+/// Outcome of a `LedgerStore::replace_atomic` call. `Failed` carries a
+/// human-readable diagnostic the handler relays to the client.
 #[derive(Debug)]
 pub enum ReplaceResult {
     Ok,
