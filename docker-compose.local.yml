@@ -31,6 +31,11 @@ services:
       redis-server --port 6379
       --io-threads 4 --io-threads-do-reads yes
       --save "" --appendonly no --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
     networks: [local]
 
   redis-rgb:
@@ -102,7 +107,11 @@ services:
       WEBYCASH_DIFFICULTY: "4"
       RUST_LOG: webycash_server_webcash=info,webycash_server_core=info
     ports: ["8181:8080"]
-    depends_on: [redis-webcash, ddb-local]
+    depends_on:
+      redis-webcash:
+        condition: service_healthy
+      ddb-local:
+        condition: service_started
     networks: [local]
 
   server-rgb:
@@ -126,7 +135,11 @@ services:
       WEBYCASH_ISSUERS: ${WEBYCASH_ISSUERS:-}
       RUST_LOG: webycash_server_rgb=info,webycash_server_core=info
     ports: ["8182:8080"]
-    depends_on: [redis-rgb, ddb-local]
+    depends_on:
+      redis-rgb:
+        condition: service_healthy
+      ddb-local:
+        condition: service_started
     networks: [local]
 
   redis-rgb-collectible:
@@ -152,7 +165,11 @@ services:
       WEBYCASH_ISSUERS: ${WEBYCASH_ISSUERS:-}
       RUST_LOG: webycash_server_rgb_collectible=info,webycash_server_core=info
     ports: ["8184:8080"]
-    depends_on: [redis-rgb-collectible, ddb-local]
+    depends_on:
+      redis-rgb-collectible:
+        condition: service_healthy
+      ddb-local:
+        condition: service_started
     networks: [local]
 
   server-voucher:
@@ -176,7 +193,11 @@ services:
       WEBYCASH_ISSUERS: ${WEBYCASH_ISSUERS:-}
       RUST_LOG: webycash_server_voucher=info,webycash_server_core=info
     ports: ["8183:8080"]
-    depends_on: [redis-voucher, ddb-local]
+    depends_on:
+      redis-voucher:
+        condition: service_healthy
+      ddb-local:
+        condition: service_started
     networks: [local]
 
 networks:
