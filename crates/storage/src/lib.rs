@@ -206,6 +206,14 @@ pub trait KeyStrategy: Send + Sync + 'static {
     fn mining_state_key(&self, asset_name: &str) -> String;
 }
 
+/// Frozen-schema key strategy used ONLY by the Webcash flavor. Emits
+/// the bare `token:{hash}` / `audit:replace:{op}` / `audit:burn:{op}` /
+/// `mining:state` keys deployed testnet Redis instances were
+/// initialised with — wire-protocol-frozen, the asset name and
+/// namespace inputs are intentionally ignored.
+///
+/// All other flavors (RGB20, RGB21, Voucher) use [`NamespacedKeys`]
+/// to partition by `(asset, contract_id, issuer_fp)`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct WebcashLegacyKeys;
 
@@ -224,6 +232,11 @@ impl KeyStrategy for WebcashLegacyKeys {
     }
 }
 
+/// Key strategy for issuer-namespaced flavors (RGB20, RGB21, Voucher).
+/// Emits `{asset}:{contract_id}:{issuer_fp}:token:{hash}` so that
+/// scans / aggregations stay within the issuer's namespace by
+/// construction. Cross-asset / cross-namespace collisions are
+/// statically impossible (8 storage-key proptest invariants pin this).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct NamespacedKeys;
 
