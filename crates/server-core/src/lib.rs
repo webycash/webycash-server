@@ -45,11 +45,16 @@ const MAX_BODY_BYTES: usize = 1024 * 1024; // 1 MB — matches legacy server
 /// Global server configuration: bind address, asset-agnostic settings.
 #[derive(Debug, Clone)]
 pub struct ServeConfig {
+    /// hyper bind address (host:port).
     pub bind_addr: SocketAddr,
+    /// Mining gate configuration (Disabled / Fixed / Dynamic).
     pub mining: MiningConfig,
 }
 
 impl ServeConfig {
+    /// Bind to 0.0.0.0:8080 with the testnet mining defaults
+    /// (`MiningMode::webcash_testnet()`). Convenient for local
+    /// scripting / smoke tests.
     pub fn testnet_default() -> Self {
         ServeConfig {
             bind_addr: "0.0.0.0:8080".parse().unwrap(),
@@ -74,12 +79,15 @@ impl ServeConfig {
 /// Whoever holds the secret owns the asset — the server witnesses the
 /// transfer of that ownership.
 pub struct Server<A: Asset, S: LedgerStore<A>> {
+    /// Bind address + mining config; baked at boot.
     pub config: ServeConfig,
+    /// Asset-flavor-typed ledger backend (Redis / DynamoDB / FDB).
     pub store: Arc<S>,
     /// Optional issuer registry. When set, `/api/v1/issue` is enabled and
     /// validates each request's `X-Issuer-Signature`. Webcash leaves this
     /// `None`; RGB and Voucher binaries populate it from env-loaded keys.
     pub issuers: Option<Arc<IssuerRegistry>>,
+    /// Replay-protection nonce cache shared across handler invocations.
     pub nonces: Arc<NonceCache>,
     _ph: PhantomData<A>,
 }

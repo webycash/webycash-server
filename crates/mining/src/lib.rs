@@ -38,11 +38,17 @@ pub enum MiningMode {
     /// `/issue` only.
     Disabled,
     /// Constant difficulty. Used for testnet.
-    Fixed { difficulty: u32 },
+    Fixed {
+        /// Constant PoW target in leading-zero bits.
+        difficulty: u32,
+    },
     /// Self-adjusting difficulty.
     Dynamic {
+        /// Starting difficulty for the very first epoch.
         initial: u32,
+        /// Target wall-clock seconds per epoch.
         target_secs: u64,
+        /// Number of accepted reports that closes an epoch.
         reports_per_epoch: u32,
     },
 }
@@ -72,6 +78,7 @@ impl MiningMode {
 /// fixed-point), not webcash.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MiningConfig {
+    /// Active mining mode (Disabled / Fixed / Dynamic).
     pub mode: MiningMode,
     /// Mining amount per report (in atomic units, 8-decimal "wats").
     /// Halved at each subsidy epoch boundary.

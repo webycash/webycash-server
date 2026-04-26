@@ -12,6 +12,7 @@
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 
+/// 32-byte SHA256 digest. Type alias used by every backend.
 pub type HashResult = [u8; 32];
 
 /// Per-input result of a `verify_pow_batch` call. Carries both the
@@ -19,7 +20,9 @@ pub type HashResult = [u8; 32];
 /// configured target (so callers can sort/rank "near-misses").
 #[derive(Debug, Clone, Copy)]
 pub struct PowResult {
+    /// Leading-zero bits in the SHA256 hash of the preimage.
     pub leading_zero_bits: u32,
+    /// `true` if `leading_zero_bits >= target`.
     pub satisfies: bool,
 }
 

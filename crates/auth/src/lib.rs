@@ -23,14 +23,19 @@ use webycash_asset_core::PgpFingerprint;
 /// with the underlying message.
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
+    /// Issue request fingerprint isn't in the registry.
     #[error("issuer fingerprint not registered: {0}")]
     UnknownIssuer(String),
+    /// Ed25519 signature didn't verify against the registered key.
     #[error("invalid signature")]
     InvalidSignature,
+    /// `(fp, nonce)` was already seen — replay attempt.
     #[error("nonce already seen (replay)")]
     ReplayedNonce,
+    /// Signature bytes are the wrong length / shape.
     #[error("malformed signature: {0}")]
     MalformedSignature(String),
+    /// Public key bytes are the wrong length / shape.
     #[error("malformed pubkey: {0}")]
     MalformedPubkey(String),
 }

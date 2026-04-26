@@ -42,8 +42,11 @@ use aluvm::{CompiledLib, CoreConfig, Lib, LibId, LibSite, Vm};
 ///   as a contract validation failure.
 #[derive(Debug, thiserror::Error)]
 pub enum AluVmError {
+    /// `CompiledLib::compile` rejected the bytecode (carries the
+    /// formatted aluvm error).
     #[error("compile error: {0}")]
     Compile(String),
+    /// VM halted in `Status::Fail` — schema validation failure.
     #[error("execution rejected (CK=fail)")]
     Rejected,
 }
