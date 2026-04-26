@@ -259,11 +259,35 @@ impl IssuedAsset for RgbFungible {
 
 impl MintableAsset for RgbFungible {
     type IssuanceContext = RgbFungibleIssuance;
-    fn verify_issuance(_ctx: &Self::IssuanceContext) -> AssetResult<()> {
-        // AluVM transition validation lives in webycash-aluvm-runtime (M3
-        // follow-up). Issuer signature check happens in webycash-auth.
+
+    /// Shape-only check: every record in the batch must share the same
+    /// `(contract_id, issuer_fp)` — issuance is single-namespace by
+    /// construction, and a mixed batch would corrupt the storage
+    /// partition. AluVM transition validation lives in
+    /// webycash-aluvm-runtime (M3 follow-up); issuer signature
+    /// verification happens in webycash-auth.
+    fn verify_issuance(ctx: &Self::IssuanceContext) -> AssetResult<()> {
+        let mut iter = ctx.records.iter();
+        let Some(first) = iter.next() else {
+            return Ok(()); // empty issuance is degenerate but not invalid
+        };
+        for r in iter {
+            if r.contract_id != first.contract_id {
+                return Err(webycash_asset_core::AssetError::Invariant(format!(
+                    "issuance batch crosses contract_id: {} vs {}",
+                    first.contract_id, r.contract_id,
+                )));
+            }
+            if r.issuer_fp != first.issuer_fp {
+                return Err(webycash_asset_core::AssetError::Invariant(format!(
+                    "issuance batch crosses issuer_fp: {} vs {}",
+                    first.issuer_fp, r.issuer_fp,
+                )));
+            }
+        }
         Ok(())
     }
+
     fn build_records(ctx: &Self::IssuanceContext) -> AssetResult<Vec<Self::Record>> {
         Ok(ctx.records.clone())
     }
@@ -484,5 +508,68 @@ mod tests {
         let err = RgbCollectible::validate_transfer(&a, &b).unwrap_err();
         // Reports the first mismatch encountered (contract_id).
         assert!(matches!(err, webycash_asset_core::AssetError::Invariant(msg) if msg.contains("contract_id")));
+    }
+
+    fn rgb_record(contract: &str, issuer: PgpFingerprint) -> RgbFungibleRecord {
+        RgbFungibleRecord {
+            public_hash: "deadbeef".into(),
+            amount_wats: 100,
+            spent: false,
+            created_at: chrono::Utc::now(),
+            spent_at: None,
+            origin: RgbOrigin::Issued,
+            contract_id: ContractId(contract.into()),
+            issuer_fp: issuer,
+        }
+    }
+
+    #[test]
+    fn fungible_verify_issuance_accepts_uniform_batch() {
+        let issuer = fp(0xaa);
+        let ctx = RgbFungibleIssuance {
+            records: vec![
+                rgb_record("rgb20-usdc", issuer.clone()),
+                rgb_record("rgb20-usdc", issuer.clone()),
+                rgb_record("rgb20-usdc", issuer),
+            ],
+        };
+        assert!(RgbFungible::verify_issuance(&ctx).is_ok());
+    }
+
+    #[test]
+    fn fungible_verify_issuance_accepts_empty_batch() {
+        let ctx = RgbFungibleIssuance { records: vec![] };
+        assert!(RgbFungible::verify_issuance(&ctx).is_ok());
+    }
+
+    #[test]
+    fn fungible_verify_issuance_rejects_mixed_contract_ids() {
+        let issuer = fp(0xaa);
+        let ctx = RgbFungibleIssuance {
+            records: vec![
+                rgb_record("rgb20-usdc", issuer.clone()),
+                rgb_record("rgb20-eth", issuer),
+            ],
+        };
+        let err = RgbFungible::verify_issuance(&ctx).unwrap_err();
+        assert!(
+            matches!(&err, webycash_asset_core::AssetError::Invariant(msg) if msg.contains("contract_id")),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn fungible_verify_issuance_rejects_mixed_issuers() {
+        let ctx = RgbFungibleIssuance {
+            records: vec![
+                rgb_record("rgb20-usdc", fp(0xaa)),
+                rgb_record("rgb20-usdc", fp(0xbb)),
+            ],
+        };
+        let err = RgbFungible::verify_issuance(&ctx).unwrap_err();
+        assert!(
+            matches!(&err, webycash_asset_core::AssetError::Invariant(msg) if msg.contains("issuer_fp")),
+            "got {err:?}",
+        );
     }
 }

@@ -159,8 +159,29 @@ impl IssuedAsset for Voucher {
 impl MintableAsset for Voucher {
     type IssuanceContext = VoucherIssuance;
 
-    fn verify_issuance(_ctx: &Self::IssuanceContext) -> AssetResult<()> {
-        // PoW + signature checks happen in `webycash-auth` + handler code.
+    /// Shape-only check: every record in the batch must share the same
+    /// `(contract_id, issuer_fp)` so the storage partition stays
+    /// single-namespace. PoW + signature checks happen in
+    /// `webycash-auth` and the issuer-handler.
+    fn verify_issuance(ctx: &Self::IssuanceContext) -> AssetResult<()> {
+        let mut iter = ctx.records.iter();
+        let Some(first) = iter.next() else {
+            return Ok(());
+        };
+        for r in iter {
+            if r.contract_id != first.contract_id {
+                return Err(webycash_asset_core::AssetError::Invariant(format!(
+                    "issuance batch crosses contract_id: {} vs {}",
+                    first.contract_id, r.contract_id,
+                )));
+            }
+            if r.issuer_fp != first.issuer_fp {
+                return Err(webycash_asset_core::AssetError::Invariant(format!(
+                    "issuance batch crosses issuer_fp: {} vs {}",
+                    first.issuer_fp, r.issuer_fp,
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -211,5 +232,77 @@ impl AssetPublic for PublicVoucher {
     }
     fn public_hash(&self) -> &str {
         &self.hash
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fp(byte: u8) -> PgpFingerprint {
+        PgpFingerprint(format!("{byte:02x}").repeat(20))
+    }
+
+    fn record(contract: &str, issuer: PgpFingerprint) -> VoucherRecord {
+        VoucherRecord {
+            public_hash: "deadbeef".into(),
+            amount_wats: 100,
+            spent: false,
+            created_at: chrono::Utc::now(),
+            spent_at: None,
+            origin: VoucherOrigin::Issued,
+            contract_id: ContractId(contract.into()),
+            issuer_fp: issuer,
+        }
+    }
+
+    #[test]
+    fn verify_issuance_accepts_uniform_batch() {
+        let issuer = fp(0xaa);
+        let ctx = VoucherIssuance {
+            records: vec![
+                record("credits-q1", issuer.clone()),
+                record("credits-q1", issuer.clone()),
+                record("credits-q1", issuer),
+            ],
+        };
+        assert!(Voucher::verify_issuance(&ctx).is_ok());
+    }
+
+    #[test]
+    fn verify_issuance_accepts_empty_batch() {
+        let ctx = VoucherIssuance { records: vec![] };
+        assert!(Voucher::verify_issuance(&ctx).is_ok());
+    }
+
+    #[test]
+    fn verify_issuance_rejects_mixed_contract_ids() {
+        let issuer = fp(0xaa);
+        let ctx = VoucherIssuance {
+            records: vec![
+                record("credits-q1", issuer.clone()),
+                record("credits-q2", issuer),
+            ],
+        };
+        let err = Voucher::verify_issuance(&ctx).unwrap_err();
+        assert!(
+            matches!(&err, webycash_asset_core::AssetError::Invariant(msg) if msg.contains("contract_id")),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn verify_issuance_rejects_mixed_issuers() {
+        let ctx = VoucherIssuance {
+            records: vec![
+                record("credits-q1", fp(0xaa)),
+                record("credits-q1", fp(0xbb)),
+            ],
+        };
+        let err = Voucher::verify_issuance(&ctx).unwrap_err();
+        assert!(
+            matches!(&err, webycash_asset_core::AssetError::Invariant(msg) if msg.contains("issuer_fp")),
+            "got {err:?}",
+        );
     }
 }
