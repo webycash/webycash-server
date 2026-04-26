@@ -90,19 +90,32 @@ build time. See CHANGELOG `[Unreleased]` for full details.
   DynamoDB Local + optional FoundationDB)
 
 ### Conformance + tests
+- [x] 132 lib tests + 9 doctests across the workspace
 - [x] 12 conformance integration tests against live Docker compose
   (lifecycle for each flavor × Redis + DynamoDB, signed `/issue`,
   OpenPGP V4 armored cert `/issue`, live webcash.org)
-- [x] 14 wire-format property tests (proptest, 256–2048 cases each)
-- [x] 8 storage-key partitioning property tests
-- [x] 6 Amount arithmetic property tests
+- [x] 59 property tests across the security/correctness boundary:
+  14 wire-format, 8 storage-key, 7 HashRecord codec, 6 Amount,
+  6 auth, 8 mining, 4 compute, 6 shared-parser
+- [x] 6 production fixture invariants pinning the webcash.org
+  Tornado-style quirks (text/html for JSON, legalese.terms required)
 - [x] Workspace clippy clean with `--tests`
+
+### Operational
+- [x] Dockerfile.flavor HEALTHCHECK against /api/v1/target
+- [x] Redis healthcheck (redis-cli ping) + service_healthy depends_on
+  in docker-compose.local.yml — no connect-fail-and-retry race on
+  cold start
 
 ### Wallet (webylib companion repo)
 - [x] `Wallet<A: Asset>` core + `wallet-{webcash,rgb,voucher}` flavors
-- [x] `webyca` multi-asset CLI: `webyca {webcash|rgb|voucher} {pay|transfer|insert}`
+- [x] `webyca` multi-asset CLI with **11 verbs**: flavor-tagged
+  (webcash/rgb/voucher × pay-or-transfer/insert), flavor-agnostic
+  (target, stats, check, burn, mining-report), local-only
+  (derive-public, verify)
+- [x] 19 CLI parse-time tests + 8 e2e tests against running compose
 - [x] Three storage backends: `MemStore`, `JsonStore`, `SqliteStore`
-  with cross-backend conformance tests
+  with cross-backend conformance tests (11 scenarios × 3 backends)
 - [x] WASM wallet target with client-side AluVM contract execution
   (validation runs in-browser before `/replace` is submitted)
 
@@ -112,3 +125,5 @@ build time. See CHANGELOG `[Unreleased]` for full details.
 - [ ] Fold the legacy webcash-only `webyc` CLI into `webyca`
 - [ ] Bench parity check (≥12.7k TPS Webcash, ≥5k TPS RGB/Voucher)
 - [ ] Vendored RGB20 / RGB21 Contractum schemas + AluVM bytecode
+- [ ] Webcash::build_records: parse mining_report preimage in-trait
+  rather than in the server-core handler
