@@ -29,12 +29,34 @@ use std::fmt;
 pub struct PgpFingerprint(pub String);
 
 impl PgpFingerprint {
-    /// Lowercase hex bytes, no spaces. Returns an error for non-hex / wrong-length input.
-    /// Real validation lands in `webycash-auth` (M3).
-    pub fn parse(_s: &str) -> Result<Self> {
-        Err(AssetError::Unimplemented(
-            "PgpFingerprint::parse — lands in M3",
-        ))
+    /// Parse a 40-char lowercase hex fingerprint (20-byte OpenPGP V4
+    /// shape). Rejects wrong length, uppercase, and non-hex digits.
+    /// Cryptographic validity (cert binding, key algorithm) lives in
+    /// `webycash-auth` — this is shape-only.
+    ///
+    /// ```
+    /// use webycash_asset_core::PgpFingerprint;
+    /// let fp = PgpFingerprint::parse("aabbccddeeff00112233445566778899aabbccdd").unwrap();
+    /// assert_eq!(fp.0.len(), 40);
+    ///
+    /// // Rejects uppercase, wrong length, non-hex.
+    /// assert!(PgpFingerprint::parse("AABBCCDDEEFF00112233445566778899AABBCCDD").is_err());
+    /// assert!(PgpFingerprint::parse("aabb").is_err());
+    /// assert!(PgpFingerprint::parse(&"z".repeat(40)).is_err());
+    /// ```
+    pub fn parse(s: &str) -> Result<Self> {
+        if s.len() != 40 {
+            return Err(AssetError::Parse(format!(
+                "PgpFingerprint must be 40 hex chars, got {}",
+                s.len()
+            )));
+        }
+        if !s.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
+            return Err(AssetError::Parse(
+                "PgpFingerprint must be lowercase hex".into(),
+            ));
+        }
+        Ok(PgpFingerprint(s.to_string()))
     }
 }
 
@@ -212,5 +234,48 @@ pub trait CollectibleRecordBuilder: TransferableAsset {
 
     fn public_namespace_envelope(_public: &Self::Public) -> Option<(String, String)> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pgp_fingerprint_accepts_canonical_form() {
+        let fp = PgpFingerprint::parse("aabbccddeeff00112233445566778899aabbccdd").unwrap();
+        assert_eq!(fp.0, "aabbccddeeff00112233445566778899aabbccdd");
+        assert_eq!(fp.to_string(), "aabbccddeeff00112233445566778899aabbccdd");
+    }
+
+    #[test]
+    fn pgp_fingerprint_rejects_uppercase() {
+        let err = PgpFingerprint::parse("AABBCCDDEEFF00112233445566778899AABBCCDD").unwrap_err();
+        assert!(matches!(err, AssetError::Parse(_)));
+    }
+
+    #[test]
+    fn pgp_fingerprint_rejects_short_input() {
+        let err = PgpFingerprint::parse("aabb").unwrap_err();
+        assert!(matches!(err, AssetError::Parse(_)));
+    }
+
+    #[test]
+    fn pgp_fingerprint_rejects_long_input() {
+        let err = PgpFingerprint::parse(&"a".repeat(41)).unwrap_err();
+        assert!(matches!(err, AssetError::Parse(_)));
+    }
+
+    #[test]
+    fn pgp_fingerprint_rejects_non_hex() {
+        let err = PgpFingerprint::parse(&"z".repeat(40)).unwrap_err();
+        assert!(matches!(err, AssetError::Parse(_)));
+    }
+
+    #[test]
+    fn pgp_fingerprint_rejects_mixed_case() {
+        let err = PgpFingerprint::parse("Aabbccddeeff00112233445566778899aabbccdd")
+            .unwrap_err();
+        assert!(matches!(err, AssetError::Parse(_)));
     }
 }
