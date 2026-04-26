@@ -204,4 +204,100 @@ mod tests {
         let a = Amount::from_str(original).unwrap();
         assert_eq!(a.to_string(), original);
     }
+
+    #[test]
+    fn checked_add_overflow_is_none() {
+        let a = Amount::from_wats(i64::MAX);
+        let b = Amount::from_wats(1);
+        assert!(a.checked_add(b).is_none());
+    }
+
+    #[test]
+    fn checked_sub_underflow_is_none() {
+        let a = Amount::from_wats(i64::MIN);
+        let b = Amount::from_wats(1);
+        assert!(a.checked_sub(b).is_none());
+    }
+
+    #[test]
+    fn negative_amount_roundtrip() {
+        let a = Amount::from_str("-1.5").unwrap();
+        assert_eq!(a.wats, -150_000_000);
+        assert_eq!(a.to_string(), "-1.50000000");
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2048))]
+
+        /// (a + b) - b == a for any a, b that don't overflow either step.
+        #[test]
+        fn add_then_sub_is_identity(
+            a_wats in (i64::MIN / 4)..=(i64::MAX / 4),
+            b_wats in (i64::MIN / 4)..=(i64::MAX / 4),
+        ) {
+            let a = Amount::from_wats(a_wats);
+            let b = Amount::from_wats(b_wats);
+            let sum = a.checked_add(b).expect("range bounded so add cannot overflow");
+            let back = sum.checked_sub(b).expect("range bounded so sub cannot underflow");
+            prop_assert_eq!(back, a);
+        }
+
+        /// `checked_add` succeeds iff the underlying i64 add doesn't overflow.
+        #[test]
+        fn checked_add_matches_i64(a in any::<i64>(), b in any::<i64>()) {
+            let result = Amount::from_wats(a).checked_add(Amount::from_wats(b));
+            match a.checked_add(b) {
+                Some(expected) => {
+                    let got = result.expect("Amount add disagrees with i64");
+                    prop_assert_eq!(got.wats, expected);
+                }
+                None => prop_assert!(result.is_none(), "Amount add succeeded where i64 overflows"),
+            }
+        }
+
+        /// `checked_sub` succeeds iff the underlying i64 sub doesn't underflow.
+        #[test]
+        fn checked_sub_matches_i64(a in any::<i64>(), b in any::<i64>()) {
+            let result = Amount::from_wats(a).checked_sub(Amount::from_wats(b));
+            match a.checked_sub(b) {
+                Some(expected) => {
+                    let got = result.expect("Amount sub disagrees with i64");
+                    prop_assert_eq!(got.wats, expected);
+                }
+                None => prop_assert!(result.is_none()),
+            }
+        }
+
+        /// Sum over an iterator is fold-add-from-zero, modulo overflow.
+        #[test]
+        fn sum_matches_fold_when_no_overflow(values in prop::collection::vec(-1_000_000_000_i64..=1_000_000_000, 0..=64)) {
+            let amounts: Vec<Amount> = values.iter().map(|&w| Amount::from_wats(w)).collect();
+            let folded: Option<Amount> = amounts
+                .iter()
+                .copied()
+                .try_fold(Amount::ZERO, |acc, x| acc.checked_add(x));
+            // Range bounded so fold cannot overflow.
+            let folded = folded.expect("range bounded");
+            let summed: Amount = amounts.iter().copied().sum();
+            prop_assert_eq!(summed, folded);
+        }
+
+        /// Display→FromStr is identity for any valid Amount in the safe range.
+        #[test]
+        fn string_roundtrip(wats in (i64::MIN / 2)..=(i64::MAX / 2)) {
+            let a = Amount::from_wats(wats);
+            let parsed: Amount = a.to_string().parse().expect("display→parse");
+            prop_assert_eq!(parsed, a);
+        }
+
+        /// `is_zero()` agrees with field comparison.
+        #[test]
+        fn is_zero_definition(wats in any::<i64>()) {
+            let a = Amount::from_wats(wats);
+            prop_assert_eq!(a.is_zero(), wats == 0);
+            prop_assert_eq!(a.is_positive(), wats > 0);
+        }
+    }
 }
