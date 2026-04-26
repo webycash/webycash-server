@@ -120,7 +120,10 @@ build time. See CHANGELOG `[Unreleased]` for full details.
   (validation runs in-browser before `/replace` is submitted)
 
 ### Open follow-ups
-- [ ] Snapshot/restore extension with `asset_type` + namespace fields
+- [x] Snapshot v2 namespace fields on UnspentOutputSnapshot +
+  SpentHashSnapshot (additive; V1 snapshots load unchanged).
+  Future: full SnapshotV2 wallet-side migration logic when
+  wallet-rgb / wallet-voucher start writing to webylib-storage.
 - [x] Parser fuzz suite (`crates/conformance/tests/fuzz_parsers.rs` —
   stable-Rust proptest, no nightly cargo-fuzz toolchain required;
   PROPTEST_CASES env var lets CI dial up to ~1M cases per parser)
