@@ -129,7 +129,14 @@ build time. See CHANGELOG `[Unreleased]` for full details.
   PROPTEST_CASES env var lets CI dial up to ~1M cases per parser)
 - [ ] AluVM script-entry fuzz (separate scope)
 - [ ] Fold the legacy webcash-only `webyc` CLI into `webyca`
-- [ ] Bench parity check (≥12.7k TPS Webcash, ≥5k TPS RGB/Voucher)
+- [x] Parser microbench landed
+  (`crates/conformance/tests/parser_bench.rs`). Catches a 10x
+  regression in the parser layer without a running server.
+  Sample throughput: ~1.7M parse/s Webcash, ~1.1M parse/s RGB20,
+  ~2.2M parse/s RGB21, ~1.5M parse/s Voucher.
+- [ ] End-to-end bench parity check (≥12.7k TPS Webcash, ≥5k TPS
+  RGB/Voucher) — requires the existing legacy throughput.rs bench
+  to be ported to each new flavor binary
 - [ ] Vendored RGB20 / RGB21 Contractum schemas + AluVM bytecode
 - [x] Webcash::build_records: preimage parsed in-trait
   (asset-webcash now has zero Unimplemented stubs)
