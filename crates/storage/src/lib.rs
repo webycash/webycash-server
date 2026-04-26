@@ -214,9 +214,16 @@ pub struct Namespace {
 }
 
 impl Namespace {
+    /// Webcash flavor — no contract or issuer scoping. Storage keys
+    /// collapse to the legacy `token:{hash}` shape via
+    /// `WebcashLegacyKeys`.
     pub fn unscoped() -> Self {
         Self::default()
     }
+
+    /// Issued-asset flavors (RGB, Voucher) — every record lives in
+    /// the `(contract_id, issuer_fp)` partition so cross-namespace
+    /// replaces are statically rejected at the storage key level.
     pub fn scoped(contract_id: ContractId, issuer_fp: PgpFingerprint) -> Self {
         Self {
             contract_id: Some(contract_id),
@@ -225,6 +232,10 @@ impl Namespace {
     }
 }
 
+/// Lift an `IssuedAsset` secret into the `(contract_id, issuer_fp)`
+/// namespace it lives in. Used by handlers that need the namespace
+/// before they have the full record (e.g. the cross-namespace check
+/// in /api/v1/replace).
 pub fn namespace_for_secret<A>(secret: &A::Secret) -> Namespace
 where
     A: IssuedAsset,
@@ -236,10 +247,19 @@ where
 // KeyStrategy
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// How storage keys are shaped per asset flavor. Implementations decide
+/// whether a record's storage key includes the namespace or not. Two
+/// concrete impls ship: `WebcashLegacyKeys` (frozen wire-format
+/// schema; ignores namespace) and `NamespacedKeys` (partitions by
+/// `(asset, contract_id, issuer_fp)`).
 pub trait KeyStrategy: Send + Sync + 'static {
+    /// Storage key for a token's HASH record.
     fn token_key(&self, asset_name: &str, ns: &Namespace, public_hash: &str) -> String;
+    /// Storage key for a `/api/v1/replace` audit record.
     fn replacement_key(&self, asset_name: &str, ns: &Namespace, op_id: &str) -> String;
+    /// Storage key for a `/api/v1/burn` audit record.
     fn burn_key(&self, asset_name: &str, ns: &Namespace, op_id: &str) -> String;
+    /// Storage key for the per-asset MiningState singleton.
     fn mining_state_key(&self, asset_name: &str) -> String;
 }
 
