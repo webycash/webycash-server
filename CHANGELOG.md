@@ -74,10 +74,23 @@ flavor's wire-format and storage shape.
 - **6 production fixture invariants** pinning the `webcash.org`
   Tornado quirks (text/html for JSON, legalese.terms required, 4
   numeric fields on get_target, etc.).
+- **10 parser fuzz tests** (4096 cases each by default; bump via
+  `PROPTEST_CASES=1000000 cargo test --release --test fuzz_parsers`).
+  Stable-Rust friendly — no nightly cargo-fuzz toolchain required.
+  Catches panic / OOM / silent-consume bugs on arbitrary byte strings
+  across every public parser (Webcash, RGB20, RGB21, Voucher).
 - **12 conformance integration tests** against live Docker compose
   (lifecycle for each flavor × Redis + DynamoDB, signed `/issue`,
   OpenPGP V4 armored cert `/issue`, live webcash.org).
 - Workspace clippy clean with `--tests`.
+
+### Trait surface
+- ZERO `Unimplemented` stubs remain in
+  `webycash-asset-{webcash,rgb,voucher}`. Every trait method
+  (`Asset::*`, `SplittableAsset::*`, `TransferableAsset::validate_transfer`,
+  `IssuedAsset::*`, `MintableAsset::{verify_issuance, build_records}`,
+  `RecordBuilder::*`, `CollectibleRecordBuilder::*`) has a real
+  implementation.
 
 ### Deployment
 - `Dockerfile.flavor` parameterised by `FLAVOR` build-arg; one image
