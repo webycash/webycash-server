@@ -31,3 +31,4 @@ pgp = { version = "0.19", optional = true }
 [dev-dependencies]
 pgp = "0.19"
 rand = "0.8"
+proptest = { workspace = true }

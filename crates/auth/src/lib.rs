@@ -313,4 +313,119 @@ mod tests {
         reg.verify(&PgpFingerprint(fp_hex), body, &sig.to_bytes())
             .expect("verify");
     }
+
+    use proptest::prelude::*;
+
+    /// Build a registry pre-populated with a single issuer keyed by `[seed; 32]`.
+    fn registry_with_seed(seed: u8) -> (IssuerRegistry, SigningKey, PgpFingerprint) {
+        let sk = SigningKey::from_bytes(&[seed; 32]);
+        let vk = sk.verifying_key();
+        let fp = PgpFingerprint(hex::encode(&vk.as_bytes()[..20]));
+        let mut reg = IssuerRegistry::new();
+        reg.add(&fp.0, vk.as_bytes()).unwrap();
+        (reg, sk, fp)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// Any random body signed by the registered key verifies under
+        /// the registered fingerprint, regardless of body length / bytes.
+        #[test]
+        fn arbitrary_body_signs_and_verifies(
+            seed in any::<u8>(),
+            body in prop::collection::vec(any::<u8>(), 0..=4096),
+        ) {
+            let (reg, sk, fp) = registry_with_seed(seed);
+            let sig = ed25519_dalek::Signer::sign(&sk, &body);
+            prop_assert!(reg.verify(&fp, &body, &sig.to_bytes()).is_ok());
+        }
+
+        /// Tampering ANY byte of the body invalidates the signature.
+        #[test]
+        fn flipping_any_body_byte_breaks_signature(
+            seed in any::<u8>(),
+            body in prop::collection::vec(any::<u8>(), 1..=512),
+            flip in any::<usize>(),
+            mask in 1u8..=255u8,
+        ) {
+            let (reg, sk, fp) = registry_with_seed(seed);
+            let sig = ed25519_dalek::Signer::sign(&sk, &body);
+            let mut tampered = body.clone();
+            let i = flip % tampered.len();
+            tampered[i] ^= mask;
+            // Tampering changed the body bytes, so signature must reject.
+            prop_assert!(reg.verify(&fp, &tampered, &sig.to_bytes()).is_err());
+        }
+
+        /// Signing under issuer A and presenting under issuer B's
+        /// fingerprint must reject — even though both signatures are
+        /// individually valid.
+        #[test]
+        fn cross_issuer_signature_rejected(
+            seed_a in any::<u8>(),
+            seed_b in any::<u8>(),
+            body in prop::collection::vec(any::<u8>(), 0..=512),
+        ) {
+            prop_assume!(seed_a != seed_b);
+            let sk_a = SigningKey::from_bytes(&[seed_a; 32]);
+            let vk_a = sk_a.verifying_key();
+            let sk_b = SigningKey::from_bytes(&[seed_b; 32]);
+            let vk_b = sk_b.verifying_key();
+            let fp_a = PgpFingerprint(hex::encode(&vk_a.as_bytes()[..20]));
+            let fp_b = PgpFingerprint(hex::encode(&vk_b.as_bytes()[..20]));
+            let mut reg = IssuerRegistry::new();
+            reg.add(&fp_a.0, vk_a.as_bytes()).unwrap();
+            reg.add(&fp_b.0, vk_b.as_bytes()).unwrap();
+            // Sign with A, verify under B → must fail.
+            let sig_a = ed25519_dalek::Signer::sign(&sk_a, &body);
+            prop_assert!(reg.verify(&fp_b, &body, &sig_a.to_bytes()).is_err());
+        }
+
+        /// First insertion of any nonce succeeds; replay returns
+        /// ReplayedNonce. Property: any nonce string, any fp.
+        #[test]
+        fn nonce_cache_blocks_any_replay(
+            fp_hex in "[0-9a-f]{40}",
+            nonce in "[a-zA-Z0-9_-]{1,64}",
+        ) {
+            let cache = NonceCache::with_capacity(10_000);
+            let fp = PgpFingerprint(fp_hex);
+            prop_assert!(cache.check_and_insert(&fp, &nonce).is_ok());
+            prop_assert!(matches!(
+                cache.check_and_insert(&fp, &nonce),
+                Err(AuthError::ReplayedNonce)
+            ));
+        }
+
+        /// Different nonces for the same issuer never collide.
+        #[test]
+        fn nonce_cache_distinguishes_distinct_nonces(
+            fp_hex in "[0-9a-f]{40}",
+            n_a in "[a-zA-Z0-9_-]{1,32}",
+            n_b in "[a-zA-Z0-9_-]{1,32}",
+        ) {
+            prop_assume!(n_a != n_b);
+            let cache = NonceCache::with_capacity(10_000);
+            let fp = PgpFingerprint(fp_hex);
+            prop_assert!(cache.check_and_insert(&fp, &n_a).is_ok());
+            prop_assert!(cache.check_and_insert(&fp, &n_b).is_ok());
+        }
+
+        /// Same nonce string under different issuers does not collide
+        /// — the (fp, nonce) pair is the dedup key.
+        #[test]
+        fn nonce_cache_partitions_by_issuer(
+            fp_a_hex in "[0-9a-f]{40}",
+            fp_b_hex in "[0-9a-f]{40}",
+            nonce in "[a-zA-Z0-9_-]{1,32}",
+        ) {
+            prop_assume!(fp_a_hex != fp_b_hex);
+            let cache = NonceCache::with_capacity(10_000);
+            let fp_a = PgpFingerprint(fp_a_hex);
+            let fp_b = PgpFingerprint(fp_b_hex);
+            prop_assert!(cache.check_and_insert(&fp_a, &nonce).is_ok());
+            prop_assert!(cache.check_and_insert(&fp_b, &nonce).is_ok());
+        }
+    }
 }
