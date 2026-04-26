@@ -226,7 +226,7 @@ pub trait MintableAsset: Asset {
 }
 
 /// How a record entered the ledger. Used by `RecordBuilder` to tag inserts.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RecordOrigin {
     /// Token was minted via PoW (mining_report endpoint).
     Mined,
