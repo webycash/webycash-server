@@ -92,6 +92,16 @@ flavor's wire-format and storage shape.
   `RecordBuilder::*`, `CollectibleRecordBuilder::*`) has a real
   implementation.
 
+### Rustdoc
+- Every public type, trait, free function, and trait method in the
+  new asset-trait crates has rustdoc:
+  - Server-side: `webycash-asset-core`, `-asset-webcash`, `-asset-rgb`,
+    `-asset-voucher`, `-storage`, `-server-core`, `-conformance`,
+    `-aluvm-runtime`, `-auth`, `-mining`, `-compute`, `-proto`.
+  - Webylib-side: `webylib-wallet-{webcash,rgb,voucher}`,
+    `webylib-server-client`, `webylib-cli`, `webylib-storage`.
+- `cargo doc --no-deps` is warning-clean across both workspaces.
+
 ### Deployment
 - `Dockerfile.flavor` parameterised by `FLAVOR` build-arg; one image
   per binary (~38 MB each, multi-stage rust:1.92-alpine).
