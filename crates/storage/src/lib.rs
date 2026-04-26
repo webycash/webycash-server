@@ -135,28 +135,48 @@ pub trait HashRecord: Sized + Send + Sync {
 // LedgerStore<A> — batch-native, asset-generic.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Asset-generic batch-native ledger store. Implemented by each
+/// backend (Redis, DynamoDB, FoundationDB, Redis+FDB) over the asset
+/// flavor `A`. Every method takes a batch — single-op callers pass a
+/// 1-element slice. The KeyStrategy trait object held by the impl
+/// decides whether keys are wire-frozen (Webcash) or namespaced
+/// (RGB / Voucher).
 #[async_trait]
 pub trait LedgerStore<A: Asset>: Send + Sync + 'static {
+    /// Insert a batch of fresh records (mining_report or signed
+    /// /issue path). Backends fail-fast on the first conflict.
     async fn insert_tokens(&self, records: &[A::Record]) -> anyhow::Result<()>;
 
+    /// Fetch full records for the given hashes within a namespace.
+    /// Slot is `None` for hashes that don't exist.
     async fn get_tokens(
         &self,
         ns: &Namespace,
         hashes: &[String],
     ) -> anyhow::Result<Vec<Option<A::Record>>>;
 
+    /// Light-weight spent-state probe used by `/api/v1/health_check`.
+    /// Returns `(hash, Some(spent)) | (hash, None)` — `None` for
+    /// unknown hashes (matches webcash.org production semantics).
     async fn check_tokens(
         &self,
         ns: &Namespace,
         hashes: &[String],
     ) -> anyhow::Result<Vec<(String, Option<bool>)>>;
 
+    /// All-or-nothing replace: per-op atomically marks every input
+    /// hash spent and inserts every output record. The batch is fired
+    /// as a single Redis Lua eval / DynamoDB TransactWriteItems / FDB
+    /// transaction. Returns one `ReplaceResult` per op in input order.
     async fn batch_replace(
         &self,
         ns: &Namespace,
         ops: &[ReplaceOp<A::Record>],
     ) -> Vec<ReplaceResult>;
 
+    /// Permanent destruction. Each `(hash, BurnRecord)` pair marks
+    /// the hash spent without inserting a replacement. All-or-nothing
+    /// per backend's atomic primitive.
     async fn batch_burn(
         &self,
         ns: &Namespace,
