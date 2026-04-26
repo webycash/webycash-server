@@ -123,16 +123,23 @@ impl fmt::Display for ContractId {
 /// All errors the asset-core trait surface can produce.
 #[derive(Debug, thiserror::Error)]
 pub enum AssetError {
+    /// Wire-format token failed to parse (invalid prefix, bad hex,
+    /// trailing input, etc.).
     #[error("parse error: {0}")]
     Parse(String),
+    /// A type-level invariant was violated (e.g. cross-namespace
+    /// inputs to a single replace).
     #[error("invariant violated: {0}")]
     Invariant(String),
+    /// Underlying `Amount` arithmetic failure (overflow / parse).
     #[error("amount error: {0}")]
     Amount(#[from] AmountError),
+    /// Trait method that hasn't been wired yet for this asset.
     #[error("unimplemented: {0}")]
     Unimplemented(&'static str),
 }
 
+/// Convenience alias used across the asset-core trait surface.
 pub type Result<T> = std::result::Result<T, AssetError>;
 
 // ---------------------------------------------------------------------------
@@ -143,6 +150,7 @@ pub type Result<T> = std::result::Result<T, AssetError>;
 /// type implementing this, including amount/issuer/contract accessors as
 /// applicable.
 pub trait AssetSecret: Send + Sync + fmt::Debug + Clone + 'static {
+    /// Render the secret as its canonical wire-format string.
     fn wire_form(&self) -> String;
     /// The bare hex secret value (without prefix/amount/issuer/contract).
     fn secret_hex(&self) -> &str;
@@ -150,6 +158,7 @@ pub trait AssetSecret: Send + Sync + fmt::Debug + Clone + 'static {
 
 /// Marker for a parsed `:public:` token.
 pub trait AssetPublic: Send + Sync + fmt::Debug + Clone + 'static {
+    /// Render the public token as its canonical wire-format string.
     fn wire_form(&self) -> String;
     /// The hex SHA256 hash that uniquely identifies the token within its namespace.
     fn public_hash(&self) -> &str;
@@ -167,8 +176,11 @@ pub trait Asset: Send + Sync + 'static {
     /// Used in storage keys and config sections.
     const NAME: &'static str;
 
+    /// Concrete `:secret:` token type for this asset.
     type Secret: AssetSecret;
+    /// Concrete `:public:` token type for this asset.
     type Public: AssetPublic;
+    /// Concrete in-DB record type for this asset.
     type Record: AssetRecord;
 
     /// Parse a `:secret:` token from its canonical wire form.
@@ -281,6 +293,8 @@ pub trait RecordBuilder: SplittableAsset {
 /// `RgbCollectible` implements this; the collectible `/api/v1/replace`
 /// handler (1:1 arity) uses it instead of the splittable variant.
 pub trait CollectibleRecordBuilder: TransferableAsset {
+    /// Build the storage record corresponding to a parsed secret,
+    /// tagged with how the record entered the ledger.
     fn record_from_secret(secret: &Self::Secret, origin: RecordOrigin) -> Self::Record;
 
     /// Returns `(contract_id, issuer_fp)` for a secret. RGB21 always has
@@ -289,6 +303,7 @@ pub trait CollectibleRecordBuilder: TransferableAsset {
         None
     }
 
+    /// Same as `namespace_envelope` but for the public-token form.
     fn public_namespace_envelope(_public: &Self::Public) -> Option<(String, String)> {
         None
     }

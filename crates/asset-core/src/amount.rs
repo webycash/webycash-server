@@ -15,10 +15,12 @@ const SCALE: i64 = 10i64.pow(DECIMALS);
 /// Atomic-unit token amount. 8-decimal-place fixed point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Amount {
+    /// Backing atomic count. `1.00000000 webcash = 100_000_000 wats`.
     pub wats: i64,
 }
 
 impl Amount {
+    /// Zero. Convenience for arithmetic seed values.
     pub const ZERO: Amount = Amount { wats: 0 };
 
     /// Construct from a raw atomic count (1 webcash = 100_000_000 wats).
@@ -32,10 +34,12 @@ impl Amount {
         Amount { wats }
     }
 
+    /// `true` if the amount is exactly zero.
     pub const fn is_zero(&self) -> bool {
         self.wats == 0
     }
 
+    /// `true` if the amount is strictly positive (`> 0`).
     pub const fn is_positive(&self) -> bool {
         self.wats > 0
     }
@@ -123,12 +127,16 @@ impl std::iter::Sum for Amount {
     }
 }
 
+/// Failure modes from `Amount::from_str` and arithmetic.
 #[derive(Debug, thiserror::Error)]
 pub enum AmountError {
+    /// String didn't parse as `digits[.digits]`.
     #[error("invalid amount format: {0}")]
     InvalidFormat(String),
+    /// Arithmetic overflowed an i64 wats counter.
     #[error("amount overflow")]
     Overflow,
+    /// More fractional digits than the 8-decimal scale supports.
     #[error("too many decimal places (max 8)")]
     TooManyDecimals,
 }
