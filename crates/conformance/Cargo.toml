@@ -36,3 +36,4 @@ webycash-asset-webcash = { workspace = true }
 webycash-asset-rgb = { workspace = true }
 webycash-asset-voucher = { workspace = true }
 webycash-storage = { workspace = true }
+chrono = { workspace = true }
