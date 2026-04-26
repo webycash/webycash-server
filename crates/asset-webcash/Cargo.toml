@@ -13,6 +13,7 @@ webycash-asset-core = { workspace = true }
 webycash-proto = { workspace = true }
 webycash-storage = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 nom = { workspace = true }

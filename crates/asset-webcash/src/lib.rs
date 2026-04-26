@@ -176,17 +176,38 @@ impl MintableAsset for Webcash {
         }
     }
 
-    /// Webcash's record set comes from the server's mining_report
-    /// handler (which has access to the full IssuanceContext + access
-    /// to ServeConfig for subsidy ratio + access to the legacy storage
-    /// tagger). Building records purely from the preimage requires the
-    /// same JSON parsing the server already does — left in place to
-    /// avoid duplicating the parser tree here.
-    fn build_records(_ctx: &Self::IssuanceContext) -> AssetResult<Vec<Self::Record>> {
-        Err(webycash_asset_core::AssetError::Unimplemented(
-            "Webcash record building lives in server-core's mining_report handler",
-        ))
+    /// Parse the mining_report preimage's `webcash` + `subsidy` token
+    /// arrays into a flat list of MINED records. The preimage must be
+    /// raw JSON (the caller is responsible for base64-decoding if
+    /// necessary — server-core's handler does that before invoking
+    /// the trait).
+    fn build_records(ctx: &Self::IssuanceContext) -> AssetResult<Vec<Self::Record>> {
+        let pre: MiningPreimageJson = serde_json::from_str(&ctx.preimage).map_err(|e| {
+            webycash_asset_core::AssetError::Parse(format!("preimage JSON: {e}"))
+        })?;
+
+        let mut records = Vec::with_capacity(pre.webcash.len() + pre.subsidy.len());
+        for token in pre.webcash.iter().chain(pre.subsidy.iter()) {
+            let secret = SecretWebcash::parse(token).map_err(|e| {
+                webycash_asset_core::AssetError::Parse(format!("mined token {token:?}: {e}"))
+            })?;
+            records.push(<Self as RecordBuilder>::record_from_secret(
+                &secret,
+                RecordOrigin::Mined,
+            ));
+        }
+        Ok(records)
     }
+}
+
+/// Subset of the mining_report preimage we need for record building.
+/// Mirrors the inline shape in server-core's handler.
+#[derive(serde::Deserialize)]
+struct MiningPreimageJson {
+    #[serde(default)]
+    webcash: Vec<String>,
+    #[serde(default)]
+    subsidy: Vec<String>,
 }
 
 /// Count leading zero bits in a SHA256 hash. Identical shape to
@@ -273,5 +294,60 @@ mod tests {
         assert_eq!(leading_zero_bits(&[0x01u8; 1]), 7);
         assert_eq!(leading_zero_bits(&[0xffu8; 1]), 0);
         assert_eq!(leading_zero_bits(&[0x00u8, 0x0fu8]), 12);
+    }
+
+    #[test]
+    fn build_records_parses_webcash_and_subsidy_arrays() {
+        let preimage = format!(
+            r#"{{"webcash":["e1.0:secret:{}","e2.0:secret:{}"],"subsidy":["e0.5:secret:{}"],"timestamp":1714003200}}"#,
+            "a".repeat(64),
+            "b".repeat(64),
+            "c".repeat(64),
+        );
+        let ctx = WebcashMiningReport {
+            preimage,
+            difficulty_target_bits: 4,
+        };
+        let records = Webcash::build_records(&ctx).expect("build");
+        assert_eq!(records.len(), 3);
+        // Amounts: 1.0 + 2.0 webcash + 0.5 subsidy.
+        let total: i64 = records.iter().map(|r| r.amount_wats).sum();
+        assert_eq!(total, 100_000_000 + 200_000_000 + 50_000_000);
+        // Every record is tagged Mined (not Replaced).
+        for r in &records {
+            assert!(matches!(r.origin, WebcashOrigin::Mined));
+            assert!(!r.spent);
+            assert!(r.spent_at.is_none());
+        }
+    }
+
+    #[test]
+    fn build_records_empty_preimage_yields_empty_records() {
+        let ctx = WebcashMiningReport {
+            preimage: r#"{"webcash":[],"subsidy":[],"timestamp":0}"#.into(),
+            difficulty_target_bits: 4,
+        };
+        let records = Webcash::build_records(&ctx).expect("build");
+        assert_eq!(records.len(), 0);
+    }
+
+    #[test]
+    fn build_records_rejects_malformed_json() {
+        let ctx = WebcashMiningReport {
+            preimage: "not-json".into(),
+            difficulty_target_bits: 4,
+        };
+        let err = Webcash::build_records(&ctx).unwrap_err();
+        assert!(matches!(err, webycash_asset_core::AssetError::Parse(_)));
+    }
+
+    #[test]
+    fn build_records_rejects_malformed_token() {
+        let ctx = WebcashMiningReport {
+            preimage: r#"{"webcash":["not-a-token"],"subsidy":[],"timestamp":0}"#.into(),
+            difficulty_target_bits: 4,
+        };
+        let err = Webcash::build_records(&ctx).unwrap_err();
+        assert!(matches!(err, webycash_asset_core::AssetError::Parse(_)));
     }
 }
