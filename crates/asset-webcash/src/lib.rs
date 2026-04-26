@@ -30,18 +30,28 @@ use webycash_asset_core::{
 /// with deployed testnet data.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WebcashRecord {
+    /// The token's public hash — primary key.
     pub public_hash: String,
+    /// Amount in atomic units (8-decimal wats).
     pub amount_wats: i64,
+    /// `true` once a `/replace` or `/burn` has consumed this hash.
     pub spent: bool,
+    /// Wall-clock when the record was inserted.
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Wall-clock when the spent transition fired; `None` while unspent.
     pub spent_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// How the record entered the ledger (mined or replaced).
     pub origin: WebcashOrigin,
 }
 
+/// How a Webcash record entered the ledger. Serialised as lowercase
+/// in storage (`mined` / `replaced`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WebcashOrigin {
+    /// Created via PoW mining_report.
     Mined,
+    /// Created by splitting / replacing existing webcash.
     Replaced,
 }
 
@@ -109,7 +119,11 @@ impl webycash_storage::HashRecord for WebcashRecord {
 /// `/api/v1/mining_report`. Verified against the current difficulty target.
 #[derive(Debug, Clone)]
 pub struct WebcashMiningReport {
+    /// Raw JSON preimage string (caller is responsible for base64
+    /// decoding if applicable).
     pub preimage: String,
+    /// Difficulty target the preimage must satisfy (leading zero
+    /// bits in SHA256(preimage)).
     pub difficulty_target_bits: u32,
 }
 

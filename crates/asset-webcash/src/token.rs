@@ -20,14 +20,18 @@ use webycash_proto::parsers::{amount_parser, hex64};
 /// A secret webcash token: `e{amount}:secret:{64-hex-chars}`.
 #[derive(Debug, Clone)]
 pub struct SecretWebcash {
+    /// Token amount in atomic units.
     pub amount: Amount,
+    /// 64-char hex secret material.
     pub secret: String,
 }
 
 /// A public webcash token: `e{amount}:public:{64-hex-chars}`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PublicWebcash {
+    /// Token amount in atomic units.
     pub amount: Amount,
+    /// 64-char hex SHA256 of `secret` bytes.
     pub hash: String,
 }
 
@@ -65,6 +69,8 @@ impl SecretWebcash {
 }
 
 impl PublicWebcash {
+    /// Parse a public webcash token from its canonical wire form
+    /// `e{amount}:public:{64-hex-chars}`.
     pub fn parse(s: &str) -> Result<Self, TokenError> {
         Self::from_str(s)
     }
@@ -106,8 +112,12 @@ impl FromStr for PublicWebcash {
     }
 }
 
+/// Wire-format parse failure for Webcash tokens.
 #[derive(Debug, thiserror::Error)]
 pub enum TokenError {
+    /// Input didn't match `e{amount}:secret:{hex64}` /
+    /// `e{amount}:public:{hex64}` (catches stray namespace segments,
+    /// wrong hex length, missing prefix, etc.).
     #[error("invalid token format: {0}")]
     InvalidFormat(String),
 }
