@@ -43,4 +43,76 @@ mod tests {
         let with_rest = format!("{}:after", "f".repeat(64));
         assert_eq!(hex64(&with_rest).unwrap().1, "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
     }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        /// Any digits-only or `digits.digits` string is recognised in
+        /// full by amount_parser.
+        #[test]
+        fn amount_parser_accepts_canonical_decimal(
+            whole in "[0-9]{1,18}",
+            frac in proptest::option::of("[0-9]{1,8}"),
+        ) {
+            let s = match &frac {
+                Some(f) => format!("{whole}.{f}"),
+                None => whole.clone(),
+            };
+            let (rest, matched) = amount_parser(&s).expect("parse");
+            prop_assert_eq!(rest, "");
+            prop_assert_eq!(matched, s.as_str());
+        }
+
+        /// Trailing non-digit chars are left for the next parser
+        /// (the production wire format uses `:` as the next separator).
+        #[test]
+        fn amount_parser_stops_at_first_non_digit(
+            whole in "[0-9]{1,8}",
+            sep in ":|;|,| ",
+            tail in "[a-zA-Z0-9]{0,32}",
+        ) {
+            let s = format!("{whole}{sep}{tail}");
+            let (rest, matched) = amount_parser(&s).expect("parse");
+            prop_assert_eq!(matched, whole.as_str());
+            // The separator + tail must remain unconsumed.
+            prop_assert!(rest.starts_with(sep.as_str()));
+        }
+
+        /// amount_parser rejects any input that doesn't START with a digit.
+        #[test]
+        fn amount_parser_rejects_non_digit_prefix(s in "[^0-9].*") {
+            prop_assert!(amount_parser(&s).is_err());
+        }
+
+        /// hex64 returns the first 64 chars when the prefix is hex.
+        #[test]
+        fn hex64_consumes_exactly_64_chars(prefix in "[0-9a-fA-F]{64}", suffix: String) {
+            let s = format!("{prefix}{suffix}");
+            let (rest, matched) = hex64(&s).expect("parse");
+            prop_assert_eq!(matched.len(), 64);
+            prop_assert_eq!(matched, prefix.as_str());
+            prop_assert_eq!(rest, suffix.as_str());
+        }
+
+        /// hex64 rejects any input shorter than 64 hex chars.
+        #[test]
+        fn hex64_rejects_short(prefix in "[0-9a-fA-F]{0,63}") {
+            prop_assert!(hex64(&prefix).is_err());
+        }
+
+        /// hex64 rejects when ANY of the first 64 chars is non-hex.
+        #[test]
+        fn hex64_rejects_non_hex_within_first_64(
+            prefix in "[0-9a-fA-F]{0,63}",
+            // A non-hex ASCII byte
+            bad in "[g-zG-Z!@#$%^&*]",
+        ) {
+            let needed = 64 - prefix.len();
+            // Pad with the bad byte and then more hex up to >64 total.
+            let s = format!("{prefix}{bad}{}", "0".repeat(needed.max(1) + 8));
+            prop_assert!(hex64(&s).is_err(), "should reject {s:?}");
+        }
+    }
 }
