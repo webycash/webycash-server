@@ -106,7 +106,13 @@ flavor's wire-format and storage shape.
     `voucher {pay,insert}`
   - flavor-agnostic: `target`, `stats`, `check`, `burn`, `mining-report`
   - local-only: `derive-public`, `verify` (no server contact required)
-- 19 parse-time + 6 e2e CLI tests against running compose.
+- 19 parse-time + 19 e2e tests across all 3 asset types: 8
+  `cli_compose` (basic verb smoke) + 4 `wallet_verbs_compose` (wallet
+  API path) + 1 `all_flavors_compose` (full lifecycle for all 4
+  flavors) + 6 `full_e2e` (comprehensive coverage matrix: RGB21
+  read-only, RGB20+Voucher burn via CLI, cross-namespace replace
+  rejection, derive-public / verify against real server state, stats
+  counter motion).
 - 3-backend `Store` trait conformance suite (`MemStore`, `JsonStore`,
   `SqliteStore` — 11 scenarios × 3 backends).
 
