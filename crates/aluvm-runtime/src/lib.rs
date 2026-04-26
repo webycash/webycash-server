@@ -93,6 +93,7 @@ impl Runtime {
 }
 
 #[cfg(test)]
+#[allow(unexpected_cfgs)]
 mod tests {
     use super::*;
     use aluvm::aluasm;

@@ -1,4 +1,10 @@
 //! Shared test harness for server-{webcash,rgb,voucher} integration tests.
+//!
+//! Each integration-test binary `mod common;` this file privately, so cargo
+//! lints anything it doesn't itself reference — and not every binary uses
+//! every helper. Suppress dead-code warnings at the module scope rather
+//! than peppering each item.
+#![allow(dead_code)]
 
 use std::io::{Read, Write};
 use std::process::{Child, Command, Stdio};
@@ -59,7 +65,7 @@ impl TestHarness {
             .env("WEBCASH_BIND_ADDR", &bind)
             .env("WEBCASH_MODE", "testnet")
             .env("WEBYCASH_DIFFICULTY", "4")
-            .env("REDIS_URL", &format!("redis://127.0.0.1:{redis_port}"))
+            .env("REDIS_URL", format!("redis://127.0.0.1:{redis_port}"))
             .env("RUST_LOG", "warn")
             .stdout(Stdio::null())
             .stderr(Stdio::null())

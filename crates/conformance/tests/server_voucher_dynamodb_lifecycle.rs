@@ -39,11 +39,11 @@ fn voucher_lifecycle_against_dynamodb_local() {
     let deadline = std::time::Instant::now() + Duration::from_secs(40);
     let mut ready = false;
     while std::time::Instant::now() < deadline {
-        if std::net::TcpStream::connect(("127.0.0.1", ddb_port)).is_ok() {
-            if probe(&ddb_url).is_ok() {
-                ready = true;
-                break;
-            }
+        if std::net::TcpStream::connect(("127.0.0.1", ddb_port)).is_ok()
+            && probe(&ddb_url).is_ok()
+        {
+            ready = true;
+            break;
         }
         std::thread::sleep(Duration::from_millis(250));
     }

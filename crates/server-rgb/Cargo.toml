@@ -19,7 +19,7 @@ fdb = ["webycash-storage/fdb", "webycash-storage/redis-fdb", "dep:foundationdb"]
 [dependencies]
 webycash-server-core = { workspace = true }
 webycash-asset-rgb = { workspace = true }
-webycash-auth = { workspace = true }
+webycash-auth = { workspace = true, features = ["openpgp"] }
 webycash-mining = { workspace = true }
 webycash-storage = { workspace = true, features = ["redis", "dynamodb"] }
 tokio = { workspace = true }

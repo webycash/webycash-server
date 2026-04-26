@@ -37,11 +37,11 @@ fn rgb_lifecycle_against_dynamodb_local() {
     let deadline = std::time::Instant::now() + Duration::from_secs(40);
     let mut ready = false;
     while std::time::Instant::now() < deadline {
-        if std::net::TcpStream::connect(("127.0.0.1", ddb_port)).is_ok() {
-            if probe(&ddb_url).is_ok() {
-                ready = true;
-                break;
-            }
+        if std::net::TcpStream::connect(("127.0.0.1", ddb_port)).is_ok()
+            && probe(&ddb_url).is_ok()
+        {
+            ready = true;
+            break;
         }
         std::thread::sleep(Duration::from_millis(250));
     }
@@ -57,7 +57,7 @@ fn rgb_lifecycle_against_dynamodb_local() {
         .env("WEBCASH_MODE", "testnet")
         .env("WEBYCASH_DIFFICULTY", "4")
         .env("WEBCASH_DB_BACKEND", "dynamodb")
-        .env("DYNAMODB_ENDPOINT", &format!("http://127.0.0.1:{ddb_port}"))
+        .env("DYNAMODB_ENDPOINT", format!("http://127.0.0.1:{ddb_port}"))
         .env("AWS_ACCESS_KEY_ID", "fake")
         .env("AWS_SECRET_ACCESS_KEY", "fake")
         .env("AWS_REGION", "us-east-1")

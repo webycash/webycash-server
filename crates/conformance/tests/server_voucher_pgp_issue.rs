@@ -94,7 +94,7 @@ fn voucher_pgp_armored_issue_end_to_end() {
     let mut child = Command::new(&bin)
         .env("WEBCASH_BIND_ADDR", &bind)
         .env("WEBCASH_MODE", "testnet")
-        .env("REDIS_URL", &format!("redis://127.0.0.1:{redis_port}"))
+        .env("REDIS_URL", format!("redis://127.0.0.1:{redis_port}"))
         .env("WEBYCASH_ISSUER_PGP_CERTS", cert_file.path())
         .env("RUST_LOG", "warn")
         .stdout(Stdio::null())

@@ -62,7 +62,17 @@ async fn main() -> anyhow::Result<()> {
             issuers
                 .add_hex(fp, pk_hex)
                 .with_context(|| format!("registering issuer {fp}"))?;
-            tracing::info!(issuer = fp, "registered");
+            tracing::info!(issuer = fp, "registered (raw ed25519)");
+        }
+    }
+    if let Ok(path) = std::env::var("WEBYCASH_ISSUER_PGP_CERTS") {
+        let blob = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading WEBYCASH_ISSUER_PGP_CERTS={path}"))?;
+        for cert in split_pgp_blocks(&blob) {
+            let fp = issuers
+                .add_pgp_armored(&cert)
+                .context("registering OpenPGP V4 cert")?;
+            tracing::info!(issuer = %fp, "registered (pgp v4)");
         }
     }
 
@@ -140,4 +150,23 @@ async fn main() -> anyhow::Result<()> {
         }
         other => anyhow::bail!("unknown WEBCASH_DB_BACKEND: {other}"),
     }
+}
+
+/// Split a multi-cert ASCII-armored blob into individual OpenPGP V4 blocks.
+fn split_pgp_blocks(blob: &str) -> Vec<String> {
+    const BEGIN: &str = "-----BEGIN PGP PUBLIC KEY BLOCK-----";
+    const END: &str = "-----END PGP PUBLIC KEY BLOCK-----";
+    let mut out = Vec::new();
+    let mut rest = blob;
+    while let Some(start) = rest.find(BEGIN) {
+        let after = &rest[start..];
+        if let Some(end) = after.find(END) {
+            let block_end = end + END.len();
+            out.push(after[..block_end].to_string());
+            rest = &after[block_end..];
+        } else {
+            break;
+        }
+    }
+    out
 }

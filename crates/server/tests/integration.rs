@@ -265,7 +265,7 @@ async fn mining_report_and_replace_full_flow() {
     assert_eq!(status, StatusCode::OK, "target response: {target}");
     let difficulty = target["difficulty_target_bits"]
         .as_u64()
-        .expect(&format!("difficulty_target_bits not a number in: {target}"))
+        .unwrap_or_else(|| panic!("difficulty_target_bits not a number in: {target}"))
         as u32;
 
     // 2. Mine a token (difficulty=1 makes this instant)

@@ -59,7 +59,7 @@ fn rgb_collectible_full_lifecycle() {
     let mut child: Child = Command::new(&bin)
         .env("WEBCASH_BIND_ADDR", &bind)
         .env("WEBCASH_MODE", "testnet")
-        .env("REDIS_URL", &format!("redis://127.0.0.1:{redis_port}"))
+        .env("REDIS_URL", format!("redis://127.0.0.1:{redis_port}"))
         .env("WEBYCASH_ISSUERS", &issuers_env)
         .env("RUST_LOG", "warn")
         .stdout(Stdio::null())
