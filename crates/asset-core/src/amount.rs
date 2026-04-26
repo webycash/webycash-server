@@ -21,6 +21,13 @@ pub struct Amount {
 impl Amount {
     pub const ZERO: Amount = Amount { wats: 0 };
 
+    /// Construct from a raw atomic count (1 webcash = 100_000_000 wats).
+    ///
+    /// ```
+    /// use webycash_asset_core::Amount;
+    /// let one = Amount::from_wats(100_000_000);
+    /// assert_eq!(one.to_string(), "1.00000000");
+    /// ```
     pub const fn from_wats(wats: i64) -> Self {
         Amount { wats }
     }
@@ -33,10 +40,26 @@ impl Amount {
         self.wats > 0
     }
 
+    /// Overflow-safe addition.
+    ///
+    /// ```
+    /// use webycash_asset_core::Amount;
+    /// let a = Amount::from_wats(i64::MAX);
+    /// let one = Amount::from_wats(1);
+    /// assert!(a.checked_add(one).is_none());
+    /// ```
     pub fn checked_add(self, other: Amount) -> Option<Amount> {
         self.wats.checked_add(other.wats).map(Amount::from_wats)
     }
 
+    /// Overflow-safe subtraction.
+    ///
+    /// ```
+    /// use webycash_asset_core::Amount;
+    /// let a = Amount::from_wats(i64::MIN);
+    /// let one = Amount::from_wats(1);
+    /// assert!(a.checked_sub(one).is_none());
+    /// ```
     pub fn checked_sub(self, other: Amount) -> Option<Amount> {
         self.wats.checked_sub(other.wats).map(Amount::from_wats)
     }
