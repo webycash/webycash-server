@@ -206,6 +206,7 @@ pub trait KeyStrategy: Send + Sync + 'static {
     fn mining_state_key(&self, asset_name: &str) -> String;
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct WebcashLegacyKeys;
 
 impl KeyStrategy for WebcashLegacyKeys {
@@ -223,6 +224,7 @@ impl KeyStrategy for WebcashLegacyKeys {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct NamespacedKeys;
 
 impl KeyStrategy for NamespacedKeys {
