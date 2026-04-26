@@ -50,8 +50,8 @@ flavor's wire-format and storage shape.
   silently parsed as plain Webcash.
 
 ### Tests
-- 90+ lib tests across the workspace.
-- **53 property tests** (proptest, 256–2048 cases each):
+- **132 lib tests + 9 doctests** across the workspace.
+- **59 property tests** (proptest, 64–2048 cases each):
   - 14 wire-format parser roundtrips (Webcash, RGB20 fungible, RGB21
     collectible, Voucher) plus cross-flavor disjointness pin.
   - 8 storage-key partitioning invariants (cross-asset uniqueness,
@@ -68,6 +68,9 @@ flavor's wire-format and storage shape.
     equilibrium stability).
   - 4 Compute backend invariants (sha256_batch length + ordered equality
     with sha2, PoW self-consistency, derive-public uniformity).
+  - 6 shared `webycash-proto` parser invariants (`amount_parser` and
+    `hex64` consume canonical input, stop at separators, reject malformed
+    prefixes).
 - **6 production fixture invariants** pinning the `webcash.org`
   Tornado quirks (text/html for JSON, legalese.terms required, 4
   numeric fields on get_target, etc.).
@@ -85,12 +88,12 @@ flavor's wire-format and storage shape.
 ### Companion wallet (webylib repo, refactor/asset-traits branch)
 - `webylib-wallet-{webcash,rgb,voucher}`: thin asset-flavor verbs
   (`pay` / `transfer` / `insert`) over a shared HTTP `Client`.
-- `webyca` multi-asset CLI binary with **9 verbs**:
+- `webyca` multi-asset CLI binary with **11 verbs**:
   - flavor-tagged: `webcash {pay,insert}`, `rgb {transfer,insert}`,
     `voucher {pay,insert}`
-  - flavor-agnostic: `target`, `check`, `burn`, `mining-report`
-  - local-only: `derive-public` (no server contact required)
-- 12 parse-time + 6 e2e CLI tests against running compose.
+  - flavor-agnostic: `target`, `stats`, `check`, `burn`, `mining-report`
+  - local-only: `derive-public`, `verify` (no server contact required)
+- 19 parse-time + 6 e2e CLI tests against running compose.
 - 3-backend `Store` trait conformance suite (`MemStore`, `JsonStore`,
   `SqliteStore` — 11 scenarios × 3 backends).
 
