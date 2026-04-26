@@ -340,13 +340,30 @@ impl Asset for RgbCollectible {
 
 // RGB21 implements TransferableAsset, NOT SplittableAsset.
 impl TransferableAsset for RgbCollectible {
+    /// Pre-flight check before submitting an RGB21 1:1 transfer. Pins
+    /// the namespace invariant — input and output must carry the same
+    /// `(contract_id, issuer_fp)` pair — locally, so a wallet bug
+    /// surfaces with a clear error rather than as a server 422.
+    ///
+    /// Real AluVM transition validation happens in the wallet (see
+    /// `webylib-wasm` for the browser path / `webylib-aluvm` for
+    /// native); this layer is shape-only.
     fn validate_transfer(
-        _input: &Self::Secret,
-        _output: &Self::Secret,
+        input: &Self::Secret,
+        output: &Self::Secret,
     ) -> webycash_asset_core::Result<()> {
-        // AluVM transition + namespace check happen here; stubbed for M3
-        // follow-up. The /transfer endpoint enforces (contract_id, issuer_fp)
-        // namespace match server-side.
+        if input.contract_id != output.contract_id {
+            return Err(webycash_asset_core::AssetError::Invariant(format!(
+                "contract_id mismatch: {} vs {}",
+                input.contract_id, output.contract_id,
+            )));
+        }
+        if input.issuer_fp != output.issuer_fp {
+            return Err(webycash_asset_core::AssetError::Invariant(format!(
+                "issuer_fp mismatch: {} vs {}",
+                input.issuer_fp, output.issuer_fp,
+            )));
+        }
         Ok(())
     }
 }
@@ -416,5 +433,56 @@ impl AssetPublic for PublicCollectible {
     }
     fn public_hash(&self) -> &str {
         &self.hash
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fp(byte: u8) -> PgpFingerprint {
+        PgpFingerprint(format!("{byte:02x}").repeat(20))
+    }
+
+    fn collectible(secret: &str, contract: &str, issuer: PgpFingerprint) -> SecretCollectible {
+        SecretCollectible {
+            secret: secret.to_string(),
+            contract_id: ContractId(contract.to_string()),
+            issuer_fp: issuer,
+        }
+    }
+
+    #[test]
+    fn validate_transfer_accepts_same_namespace() {
+        let issuer = fp(0xaa);
+        let a = collectible(&"a".repeat(64), "rgb21-art", issuer.clone());
+        let b = collectible(&"b".repeat(64), "rgb21-art", issuer);
+        assert!(RgbCollectible::validate_transfer(&a, &b).is_ok());
+    }
+
+    #[test]
+    fn validate_transfer_rejects_contract_mismatch() {
+        let issuer = fp(0xaa);
+        let a = collectible(&"a".repeat(64), "rgb21-art", issuer.clone());
+        let b = collectible(&"b".repeat(64), "rgb21-other", issuer);
+        let err = RgbCollectible::validate_transfer(&a, &b).unwrap_err();
+        assert!(matches!(err, webycash_asset_core::AssetError::Invariant(_)));
+    }
+
+    #[test]
+    fn validate_transfer_rejects_issuer_mismatch() {
+        let a = collectible(&"a".repeat(64), "rgb21-art", fp(0xaa));
+        let b = collectible(&"b".repeat(64), "rgb21-art", fp(0xbb));
+        let err = RgbCollectible::validate_transfer(&a, &b).unwrap_err();
+        assert!(matches!(err, webycash_asset_core::AssetError::Invariant(_)));
+    }
+
+    #[test]
+    fn validate_transfer_rejects_both_mismatch() {
+        let a = collectible(&"a".repeat(64), "rgb21-art", fp(0xaa));
+        let b = collectible(&"b".repeat(64), "rgb21-other", fp(0xbb));
+        let err = RgbCollectible::validate_transfer(&a, &b).unwrap_err();
+        // Reports the first mismatch encountered (contract_id).
+        assert!(matches!(err, webycash_asset_core::AssetError::Invariant(msg) if msg.contains("contract_id")));
     }
 }
