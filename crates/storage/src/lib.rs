@@ -40,10 +40,15 @@ pub mod redis_fdb_backend;
 /// amount so an operator can reconstruct the chain of state moves.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplacementRecord {
+    /// Unique opaque op id (UUID-v4 in the production handlers).
     pub id: String,
+    /// Public hashes of the inputs being marked spent.
     pub input_hashes: Vec<String>,
+    /// Public hashes of the outputs being inserted.
     pub output_hashes: Vec<String>,
+    /// Conserved total (sum of input amounts == sum of output amounts).
     pub total_amount_wats: i64,
+    /// Wall-clock when the replace committed.
     pub created_at: DateTime<Utc>,
 }
 
@@ -52,9 +57,14 @@ pub struct ReplacementRecord {
 /// a replacement output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BurnRecord {
+    /// Unique opaque op id (UUID-v4 in the production handlers).
     pub id: String,
+    /// The public hash that was destroyed.
     pub public_hash: String,
+    /// Amount that was destroyed (carried for audit purposes; does
+    /// NOT re-enter circulation).
     pub amount_wats: i64,
+    /// Wall-clock when the burn committed.
     pub burned_at: DateTime<Utc>,
 }
 
@@ -62,11 +72,17 @@ pub struct BurnRecord {
 /// MiningState plus aggregations across the token store.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EconomyStats {
+    /// Sum of all unspent token amounts.
     pub total_circulation_wats: i64,
+    /// Cumulative count of accepted mining_report submissions.
     pub mining_reports_count: u64,
+    /// Current PoW target in leading-zero bits.
     pub difficulty_target_bits: u32,
+    /// Difficulty epoch counter (incremented at each adjustment).
     pub epoch: u32,
+    /// Mining reward per accepted report (wats).
     pub mining_amount_wats: i64,
+    /// Subsidy per accepted report (wats).
     pub subsidy_amount_wats: i64,
 }
 
@@ -76,13 +92,22 @@ pub struct EconomyStats {
 /// (Redis) / TransactWriteItem (DynamoDB) atomic.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MiningState {
+    /// Sum of all unspent token amounts since genesis.
     pub total_circulation_wats: i64,
+    /// Cumulative count of accepted mining_report submissions.
     pub mining_reports_count: u64,
+    /// Current PoW target in leading-zero bits.
     pub difficulty_target_bits: u32,
+    /// Difficulty epoch counter.
     pub epoch: u32,
+    /// Mining reward per accepted report this epoch.
     pub mining_amount_wats: i64,
+    /// Subsidy per accepted report this epoch.
     pub subsidy_amount_wats: i64,
+    /// Wall-clock when the current epoch started.
     pub epoch_started_at: DateTime<Utc>,
+    /// Accumulated proof-of-work since genesis (sum of leading-zero
+    /// bits across all accepted reports).
     pub aggregate_work: u64,
 }
 
@@ -91,8 +116,11 @@ pub struct MiningState {
 /// Backends commit all-or-nothing.
 #[derive(Debug, Clone)]
 pub struct ReplaceOp<R> {
+    /// Public hashes to mark spent.
     pub inputs: Vec<String>,
+    /// Records to insert.
     pub outputs: Vec<R>,
+    /// Audit envelope written alongside the state move.
     pub record: ReplacementRecord,
 }
 
@@ -100,7 +128,9 @@ pub struct ReplaceOp<R> {
 /// human-readable diagnostic the handler relays to the client.
 #[derive(Debug)]
 pub enum ReplaceResult {
+    /// All-or-nothing replace committed.
     Ok,
+    /// Replace was rejected; carries the diagnostic to surface.
     Failed(String),
 }
 
@@ -114,7 +144,10 @@ pub enum ReplaceResult {
 /// legacy webcash testnet compat), JSON in a single field, or strict-types
 /// for RGB. Webcash uses the legacy field-per-field layout.
 pub trait HashRecord: Sized + Send + Sync {
+    /// The token's public hash — primary key within its namespace.
     fn public_hash(&self) -> &str;
+    /// Amount in atomic units (8-decimal wats). Collectibles return 0
+    /// to keep the HASH layout uniform with fungible records.
     fn amount_wats(&self) -> i64;
 
     /// Returns the storage namespace for this record. Webcash records
@@ -141,7 +174,12 @@ pub trait HashRecord: Sized + Send + Sync {
 /// 1-element slice. The KeyStrategy trait object held by the impl
 /// decides whether keys are wire-frozen (Webcash) or namespaced
 /// (RGB / Voucher).
+// `#[async_trait]` generates internal helper methods that don't show
+// up in the trait's user-visible API but trip `missing_docs`.
+// Suppress at the trait level — every user-facing method below
+// carries rustdoc.
 #[async_trait]
+#[allow(missing_docs)]
 pub trait LedgerStore<A: Asset>: Send + Sync + 'static {
     /// Insert a batch of fresh records (mining_report or signed
     /// /issue path). Backends fail-fast on the first conflict.
@@ -183,8 +221,12 @@ pub trait LedgerStore<A: Asset>: Send + Sync + 'static {
         ops: &[(String, BurnRecord)],
     ) -> anyhow::Result<()>;
 
+    /// Read the current `MiningState` singleton. `None` on a fresh
+    /// store before the first mining_report.
     async fn get_mining_state(&self) -> anyhow::Result<Option<MiningState>>;
 
+    /// Atomic compare-and-swap on `MiningState`. Backends use a
+    /// per-flavor key under their atomic primitive (Lua / TransactWriteItem).
     async fn update_mining_state(&self, state: &MiningState) -> anyhow::Result<()>;
 
     async fn get_stats(&self) -> anyhow::Result<EconomyStats> {
@@ -207,9 +249,15 @@ pub trait LedgerStore<A: Asset>: Send + Sync + 'static {
 // Namespacing
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Storage partitioning key. Webcash collapses to `unscoped`;
+/// RGB / Voucher use `scoped(contract_id, issuer_fp)`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Namespace {
+    /// Contract id when the asset is issuer-namespaced; `None` for
+    /// flat-keyspace flavors (Webcash).
     pub contract_id: Option<ContractId>,
+    /// Issuer's PGP V4 fingerprint when issuer-namespaced; `None`
+    /// otherwise.
     pub issuer_fp: Option<PgpFingerprint>,
 }
 
@@ -318,7 +366,13 @@ impl KeyStrategy for NamespacedKeys {
     }
 }
 
-pub struct Strategy<A>(PhantomData<A>);
+/// PhantomData wrapper used by backends to carry the asset-flavor
+/// type parameter without storing a concrete instance. Public so
+/// downstream backend impls can use it.
+pub struct Strategy<A>(
+    /// Marker only.
+    pub PhantomData<A>,
+);
 
 #[cfg(test)]
 mod tests {
