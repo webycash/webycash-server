@@ -20,6 +20,17 @@ use sha2::{Digest, Sha256};
 // Mining configuration (operator-driven via env / TOML)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// How `/api/v1/mining_report` decides what difficulty to require.
+/// Three discriminants:
+///
+/// - `Disabled`: endpoint returns 503; no mining accepted (RGB21
+///   collectible defaults to this — issuance is operator-signed only).
+/// - `Fixed { difficulty }`: constant difficulty target across all
+///   epochs. Used for testnet so a CPU miner finds a preimage in
+///   seconds.
+/// - `Dynamic`: self-adjusting per `webycash_mining::adjust_difficulty`,
+///   targeting `target_secs` wall-clock between `reports_per_epoch`
+///   reports.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum MiningMode {
@@ -55,6 +66,10 @@ impl MiningMode {
     }
 }
 
+/// Per-deployment mining configuration. Loaded from TOML / env at
+/// boot; passed into the server's `mining_report` handler. The
+/// `mining_amount` / `subsidy_amount` fields are wats (8-decimal
+/// fixed-point), not webcash.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MiningConfig {
     pub mode: MiningMode,
