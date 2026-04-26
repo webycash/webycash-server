@@ -125,5 +125,5 @@ build time. See CHANGELOG `[Unreleased]` for full details.
 - [ ] Fold the legacy webcash-only `webyc` CLI into `webyca`
 - [ ] Bench parity check (≥12.7k TPS Webcash, ≥5k TPS RGB/Voucher)
 - [ ] Vendored RGB20 / RGB21 Contractum schemas + AluVM bytecode
-- [ ] Webcash::build_records: parse mining_report preimage in-trait
-  rather than in the server-core handler
+- [x] Webcash::build_records: preimage parsed in-trait
+  (asset-webcash now has zero Unimplemented stubs)
