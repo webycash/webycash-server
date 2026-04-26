@@ -50,12 +50,28 @@ flavor's wire-format and storage shape.
   silently parsed as plain Webcash.
 
 ### Tests
-- 73+ lib tests across the workspace.
-- 14 wire-format property tests (proptest, 256–2048 cases each)
-  covering Webcash, RGB20-shape fungible, RGB21-shape collectible,
-  Voucher: secret/public roundtrip, hash uniformity, cross-flavor
-  disjointness, `Amount` precision over `[0, i64::MAX/2]`.
-- 12 conformance integration tests against live Docker compose
+- 90+ lib tests across the workspace.
+- **53 property tests** (proptest, 256–2048 cases each):
+  - 14 wire-format parser roundtrips (Webcash, RGB20 fungible, RGB21
+    collectible, Voucher) plus cross-flavor disjointness pin.
+  - 8 storage-key partitioning invariants (cross-asset uniqueness,
+    namespace isolation, role-prefix non-collision, legacy-keys frozen).
+  - 7 HashRecord codec roundtrips (every persisted record type's
+    `to_fields` / `from_fields` agreement, including chrono nanoseconds).
+  - 6 Amount arithmetic invariants (overflow, sub, sum-vs-fold,
+    Display↔FromStr roundtrip across `i64::MIN/2..=i64::MAX/2`).
+  - 6 Auth invariants (arbitrary-body Ed25519 sign/verify, single-byte
+    tampering rejection, cross-issuer rejection, nonce replay protection,
+    distinct-nonce non-collision, `(fp, nonce)` partitioning).
+  - 8 Mining invariants (PoW range, monotonicity, agreement with
+    `leading_zero_bits`, difficulty adjustment ±2 clamp, floor at 1,
+    equilibrium stability).
+  - 4 Compute backend invariants (sha256_batch length + ordered equality
+    with sha2, PoW self-consistency, derive-public uniformity).
+- **6 production fixture invariants** pinning the `webcash.org`
+  Tornado quirks (text/html for JSON, legalese.terms required, 4
+  numeric fields on get_target, etc.).
+- **12 conformance integration tests** against live Docker compose
   (lifecycle for each flavor × Redis + DynamoDB, signed `/issue`,
   OpenPGP V4 armored cert `/issue`, live webcash.org).
 - Workspace clippy clean with `--tests`.
@@ -65,6 +81,18 @@ flavor's wire-format and storage shape.
   per binary (~38 MB each, multi-stage rust:1.92-alpine).
 - `docker-compose.local.yml` runs all four flavors locally with
   per-flavor Redis + a shared DynamoDB Local + optional FoundationDB.
+
+### Companion wallet (webylib repo, refactor/asset-traits branch)
+- `webylib-wallet-{webcash,rgb,voucher}`: thin asset-flavor verbs
+  (`pay` / `transfer` / `insert`) over a shared HTTP `Client`.
+- `webyca` multi-asset CLI binary with **9 verbs**:
+  - flavor-tagged: `webcash {pay,insert}`, `rgb {transfer,insert}`,
+    `voucher {pay,insert}`
+  - flavor-agnostic: `target`, `check`, `burn`, `mining-report`
+  - local-only: `derive-public` (no server contact required)
+- 12 parse-time + 6 e2e CLI tests against running compose.
+- 3-backend `Store` trait conformance suite (`MemStore`, `JsonStore`,
+  `SqliteStore` — 11 scenarios × 3 backends).
 
 ## [0.2.3] - 2026-04-22
 
