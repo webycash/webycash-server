@@ -4,6 +4,68 @@ All notable changes to `webycash-server` are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — `refactor/asset-traits` branch
+
+Asset-gated server family: one workspace, four binaries
+(`server-{webcash,rgb,rgb-collectible,voucher}`). Each binary
+specialises a generic `Server<A: Asset, S: LedgerStore<A>>` over the
+flavor's wire-format and storage shape.
+
+### Architecture
+- **`webycash-asset-core`**: `Asset`, `SplittableAsset`,
+  `TransferableAsset`, `IssuedAsset`, `MintableAsset` trait hierarchy +
+  `RecordBuilder` / `CollectibleRecordBuilder`.
+- **`webycash-proto`**: shared nom parsers (`amount_parser`, `hex64`).
+- **`webycash-asset-{webcash,rgb,voucher}`**: per-flavor token types,
+  parsers, and `HashRecord` codecs. Webcash wire format is frozen and
+  byte-exact against webcash.org production.
+- **`webycash-storage`**: generic `LedgerStore<A>` plus four backends
+  (Redis, DynamoDB, FoundationDB, Redis+FDB). `KeyStrategy` trait
+  preserves the legacy Webcash testnet schema while RGB/Voucher use
+  `(asset, contract_id, issuer_fp, public_hash)` partitioning.
+- **`webycash-auth`**: Ed25519 issuer signature verification + nonce
+  cache; `add_pgp_armored` parses OpenPGP V4 certs (rpgp 0.19) and
+  registers the primary Ed25519 key under its V4 fingerprint.
+- **`webycash-mining`**: `MiningMode::{Disabled, Fixed, Dynamic}` with
+  configurable difficulty / subsidy ratio per flavor.
+- **`webycash-aluvm-runtime`**: real AluVM 0.12 wrapper (test-side
+  only — RGB validation is client-side per RGB's design).
+- **`webycash-server-core`**: `serve` / `serve_issued` /
+  `serve_collectible` entry points, hyper HTTP/1.1+H2.
+- Single endpoint everywhere: `/api/v1/replace`. Server is a
+  single-use-seal registry that sees secrets in transit and persists
+  hashes + amounts + namespace. No `/transfer`. No server-side AluVM.
+
+### Issuer authentication
+- `WEBYCASH_ISSUERS=fp:hex_pubkey,...` for raw Ed25519 keys.
+- `WEBYCASH_ISSUER_PGP_CERTS=/path/to/certs.asc` for ASCII-armored
+  OpenPGP V4 certs. Both env vars supported on `server-rgb`,
+  `server-rgb-collectible`, `server-voucher`.
+- Tampered body → 500. Replayed nonce → 500.
+  Cross-namespace `/replace` → 422.
+
+### Production wire format
+- All eight `FromStr` impls now require parsers to consume the whole
+  input (uncovered by proptest). A namespaced token can no longer be
+  silently parsed as plain Webcash.
+
+### Tests
+- 73+ lib tests across the workspace.
+- 14 wire-format property tests (proptest, 256–2048 cases each)
+  covering Webcash, RGB20-shape fungible, RGB21-shape collectible,
+  Voucher: secret/public roundtrip, hash uniformity, cross-flavor
+  disjointness, `Amount` precision over `[0, i64::MAX/2]`.
+- 12 conformance integration tests against live Docker compose
+  (lifecycle for each flavor × Redis + DynamoDB, signed `/issue`,
+  OpenPGP V4 armored cert `/issue`, live webcash.org).
+- Workspace clippy clean with `--tests`.
+
+### Deployment
+- `Dockerfile.flavor` parameterised by `FLAVOR` build-arg; one image
+  per binary (~38 MB each, multi-stage rust:1.92-alpine).
+- `docker-compose.local.yml` runs all four flavors locally with
+  per-flavor Redis + a shared DynamoDB Local + optional FoundationDB.
+
 ## [0.2.3] - 2026-04-22
 
 ### Architecture
