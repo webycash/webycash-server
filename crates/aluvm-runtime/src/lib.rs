@@ -33,6 +33,13 @@ use aluvm::isa::Instr;
 use aluvm::regs::Status;
 use aluvm::{CompiledLib, CoreConfig, Lib, LibId, LibSite, Vm};
 
+/// Failure modes for the AluVM runtime wrapper.
+///
+/// - `Compile`: aluvm::CompiledLib::compile returned an error; the
+///   bytecode is malformed.
+/// - `Rejected`: the VM halted in `Status::Fail`. RGB transitions
+///   that don't satisfy their schema produce this; callers treat it
+///   as a contract validation failure.
 #[derive(Debug, thiserror::Error)]
 pub enum AluVmError {
     #[error("compile error: {0}")]
@@ -47,6 +54,9 @@ pub enum AluVmError {
 pub struct Runtime;
 
 impl Runtime {
+    /// Construct a new runtime instance. Currently zero-cost
+    /// (instances hold no state); a future revision can attach a
+    /// library cache here.
     pub fn new() -> Self {
         Runtime
     }
