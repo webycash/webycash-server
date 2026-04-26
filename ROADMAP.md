@@ -121,7 +121,10 @@ build time. See CHANGELOG `[Unreleased]` for full details.
 
 ### Open follow-ups
 - [ ] Snapshot/restore extension with `asset_type` + namespace fields
-- [ ] Fuzz harnesses (`cargo-fuzz`) for parsers and AluVM script entry
+- [x] Parser fuzz suite (`crates/conformance/tests/fuzz_parsers.rs` —
+  stable-Rust proptest, no nightly cargo-fuzz toolchain required;
+  PROPTEST_CASES env var lets CI dial up to ~1M cases per parser)
+- [ ] AluVM script-entry fuzz (separate scope)
 - [ ] Fold the legacy webcash-only `webyc` CLI into `webyca`
 - [ ] Bench parity check (≥12.7k TPS Webcash, ≥5k TPS RGB/Voucher)
 - [ ] Vendored RGB20 / RGB21 Contractum schemas + AluVM bytecode
