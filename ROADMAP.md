@@ -134,9 +134,15 @@ build time. See CHANGELOG `[Unreleased]` for full details.
   regression in the parser layer without a running server.
   Sample throughput: ~1.7M parse/s Webcash, ~1.1M parse/s RGB20,
   ~2.2M parse/s RGB21, ~1.5M parse/s Voucher.
-- [ ] End-to-end bench parity check (≥12.7k TPS Webcash, ≥5k TPS
-  RGB/Voucher) — requires the existing legacy throughput.rs bench
-  to be ported to each new flavor binary
+- [x] Per-flavor throughput regression probe landed
+  (`crates/conformance/tests/throughput_bench.rs`). 32 threads × 1k
+  requests against each flavor's /api/v1/health_check; ~1k TPS at
+  HTTP/1.1+per-request-connection shape. Catches 10x regressions
+  without needing to boot a server inline.
+- [ ] HTTP/2 stream-multiplexed bench parity (≥12.7k TPS Webcash,
+  ≥5k TPS RGB/Voucher) — needs the legacy throughput.rs's inline-
+  server-boot pattern ported to Server<A: Asset> per flavor (~400
+  LOC, separate scope)
 - [ ] Vendored RGB20 / RGB21 Contractum schemas + AluVM bytecode
 - [x] Webcash::build_records: preimage parsed in-trait
   (asset-webcash now has zero Unimplemented stubs)
