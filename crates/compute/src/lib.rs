@@ -132,4 +132,83 @@ mod tests {
         let expected = hex::encode(Sha256::digest(secret.as_bytes()));
         assert_eq!(out[0].public_hash_hex, expected);
     }
+
+    use proptest::prelude::*;
+
+    /// Block on a tokio future from inside proptest's sync runner.
+    fn run<F: std::future::Future>(f: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(f)
+        }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// Batch length always matches input length.
+        #[test]
+        fn cpu_sha256_batch_length_matches_input(
+            inputs in prop::collection::vec(prop::collection::vec(any::<u8>(), 0..=256), 0..=32),
+        ) {
+            let result = run(async {
+                CpuBackend.sha256_batch(&inputs).await
+            });
+            prop_assert_eq!(result.len(), inputs.len());
+        }
+
+        /// Each batch element equals the canonical sha2::Sha256 of the
+        /// same input — and order is preserved.
+        #[test]
+        fn cpu_sha256_batch_agrees_with_sha2(
+            inputs in prop::collection::vec(prop::collection::vec(any::<u8>(), 0..=128), 0..=16),
+        ) {
+            let result = run(async {
+                CpuBackend.sha256_batch(&inputs).await
+            });
+            for (i, (got, src)) in result.iter().zip(inputs.iter()).enumerate() {
+                let want: [u8; 32] = Sha256::digest(src).into();
+                prop_assert_eq!(got, &want, "index {} diverges", i);
+            }
+        }
+
+        /// PoW batch agrees with `webycash_mining::verify_pow` shape:
+        /// `satisfies == leading_zero_bits >= target`.
+        #[test]
+        fn cpu_verify_pow_batch_self_consistent(
+            preimages in prop::collection::vec(any::<String>(), 0..=8),
+            target_bits in 0u32..=12,
+        ) {
+            let inputs: Vec<(String, u32)> =
+                preimages.iter().map(|s| (s.clone(), target_bits)).collect();
+            let results = run(async {
+                CpuBackend.verify_pow_batch(&inputs).await
+            });
+            prop_assert_eq!(results.len(), inputs.len());
+            for (r, (s, t)) in results.iter().zip(inputs.iter()) {
+                prop_assert_eq!(r.satisfies, r.leading_zero_bits >= *t);
+                // And the leading_zero_bits matches a fresh sha2 hash.
+                let h = Sha256::digest(s.as_bytes());
+                let lz = count_leading_zero_bits(&h);
+                prop_assert_eq!(r.leading_zero_bits, lz);
+            }
+        }
+
+        /// `derive_public_hash_batch` matches `sha256(secret_bytes)` for
+        /// every secret (uniform hash domain across asset flavors).
+        #[test]
+        fn cpu_derive_public_hash_uniform_with_sha2(
+            secrets in prop::collection::vec(any::<String>(), 0..=16),
+        ) {
+            let derivations = run(async {
+                CpuBackend.derive_public_hash_batch(&secrets).await
+            });
+            prop_assert_eq!(derivations.len(), secrets.len());
+            for (d, s) in derivations.iter().zip(secrets.iter()) {
+                let want = hex::encode(Sha256::digest(s.as_bytes()));
+                prop_assert_eq!(&d.public_hash_hex, &want);
+            }
+        }
+    }
 }
