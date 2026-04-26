@@ -14,6 +14,9 @@ use sha2::{Digest, Sha256};
 
 pub type HashResult = [u8; 32];
 
+/// Per-input result of a `verify_pow_batch` call. Carries both the
+/// observed leading-zero count AND the boolean comparison against the
+/// configured target (so callers can sort/rank "near-misses").
 #[derive(Debug, Clone, Copy)]
 pub struct PowResult {
     pub leading_zero_bits: u32,
@@ -27,12 +30,22 @@ pub struct TokenDerivation {
     pub public_hash_hex: String,
 }
 
+/// Pluggable hash + PoW + derive backend. CPU reference impl ships
+/// in this crate; CUDA / wgpu impls re-introduced in M1. Every method
+/// is batch-native — the per-input shape preserves order so callers
+/// can zip results back with their inputs.
 #[async_trait]
 pub trait ComputeBackend: Send + Sync + 'static {
+    /// Backend name for logging (e.g. `"cpu"`, `"cuda"`, `"wgpu"`).
     fn name(&self) -> &'static str;
 
+    /// SHA256 every input. Returns one 32-byte result per input,
+    /// in input order.
     async fn sha256_batch(&self, inputs: &[Vec<u8>]) -> Vec<HashResult>;
 
+    /// SHA256 each preimage and report whether the resulting digest
+    /// has at least the input's target leading-zero bits. Returns one
+    /// `PowResult` per input, in input order.
     async fn verify_pow_batch(&self, inputs: &[(String, u32)]) -> Vec<PowResult>;
 
     /// Derive `(public_hash, ...)` for a batch of bare hex secrets.
@@ -44,6 +57,10 @@ pub trait ComputeBackend: Send + Sync + 'static {
 // CPU reference backend.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Reference CPU implementation. Pure sha2 + leading-zero math; no
+/// hardware acceleration. Fast enough that the property tests in
+/// `webycash-conformance` pin agreement with the canonical sha2
+/// crate over arbitrary input.
 pub struct CpuBackend;
 
 fn count_leading_zero_bits(hash: &[u8]) -> u32 {
