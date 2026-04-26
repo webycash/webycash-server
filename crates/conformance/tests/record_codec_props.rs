@@ -51,7 +51,6 @@ fn arb_rgb_origin() -> impl Strategy<Value = RgbOrigin> {
         Just(RgbOrigin::Mined),
         Just(RgbOrigin::Issued),
         Just(RgbOrigin::Replaced),
-        Just(RgbOrigin::Transferred),
     ]
 }
 

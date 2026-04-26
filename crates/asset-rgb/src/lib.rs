@@ -43,7 +43,6 @@ pub enum RgbOrigin {
     Mined,
     Issued,
     Replaced,
-    Transferred,
 }
 
 impl std::fmt::Display for RgbOrigin {
@@ -52,7 +51,6 @@ impl std::fmt::Display for RgbOrigin {
             RgbOrigin::Mined => f.write_str("mined"),
             RgbOrigin::Issued => f.write_str("issued"),
             RgbOrigin::Replaced => f.write_str("replaced"),
-            RgbOrigin::Transferred => f.write_str("transferred"),
         }
     }
 }
@@ -97,7 +95,6 @@ impl webycash_storage::HashRecord for RgbFungibleRecord {
                 RgbOrigin::Mined => "mined",
                 RgbOrigin::Issued => "issued",
                 RgbOrigin::Replaced => "replaced",
-                RgbOrigin::Transferred => "transferred",
             }
             .into(),
         );
@@ -120,8 +117,11 @@ impl webycash_storage::HashRecord for RgbFungibleRecord {
                 .map(|d| d.with_timezone(&chrono::Utc)),
             origin: match fields.get("origin").map(|s| s.as_str()) {
                 Some("issued") => RgbOrigin::Issued,
-                Some("replaced") => RgbOrigin::Replaced,
-                Some("transferred") => RgbOrigin::Transferred,
+                // "transferred" is a legacy spelling from when the
+                // collectible flavor exposed /api/v1/transfer; we
+                // unified to /api/v1/replace and now emit "replaced",
+                // but old DB rows still need to load.
+                Some("replaced") | Some("transferred") => RgbOrigin::Replaced,
                 _ => RgbOrigin::Mined,
             },
             contract_id: ContractId(fields.get("contract_id")?.clone()),
@@ -173,7 +173,6 @@ impl webycash_storage::HashRecord for RgbCollectibleRecord {
                 RgbOrigin::Mined => "mined",
                 RgbOrigin::Issued => "issued",
                 RgbOrigin::Replaced => "replaced",
-                RgbOrigin::Transferred => "transferred",
             }
             .into(),
         );
@@ -195,8 +194,11 @@ impl webycash_storage::HashRecord for RgbCollectibleRecord {
                 .map(|d| d.with_timezone(&chrono::Utc)),
             origin: match fields.get("origin").map(|s| s.as_str()) {
                 Some("issued") => RgbOrigin::Issued,
-                Some("replaced") => RgbOrigin::Replaced,
-                Some("transferred") => RgbOrigin::Transferred,
+                // "transferred" is a legacy spelling from when the
+                // collectible flavor exposed /api/v1/transfer; we
+                // unified to /api/v1/replace and now emit "replaced",
+                // but old DB rows still need to load.
+                Some("replaced") | Some("transferred") => RgbOrigin::Replaced,
                 _ => RgbOrigin::Mined,
             },
             contract_id: ContractId(fields.get("contract_id")?.clone()),
@@ -438,7 +440,7 @@ impl CollectibleRecordBuilder for RgbCollectible {
             spent_at: None,
             origin: match origin {
                 RecordOrigin::Mined => RgbOrigin::Mined,
-                RecordOrigin::Replaced => RgbOrigin::Transferred,
+                RecordOrigin::Replaced => RgbOrigin::Replaced,
             },
             contract_id: secret.contract_id.clone(),
             issuer_fp: secret.issuer_fp.clone(),
@@ -589,6 +591,23 @@ mod tests {
         assert_eq!(RgbOrigin::Mined.to_string(), "mined");
         assert_eq!(RgbOrigin::Issued.to_string(), "issued");
         assert_eq!(RgbOrigin::Replaced.to_string(), "replaced");
-        assert_eq!(RgbOrigin::Transferred.to_string(), "transferred");
+    }
+
+    /// Legacy DB rows wrote `origin: "transferred"` from before we
+    /// unified to /api/v1/replace. Pin that they still load as Replaced
+    /// (one-way: we never emit "transferred" again).
+    #[test]
+    fn from_fields_accepts_legacy_transferred_alias() {
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("amount_wats".into(), "100".into());
+        fields.insert("origin".into(), "transferred".into());
+        fields.insert("contract_id".into(), "rgb20-test".into());
+        fields.insert(
+            "issuer_fp".into(),
+            "aabbccddeeff00112233445566778899aabbccdd".into(),
+        );
+        let r = <RgbFungibleRecord as webycash_storage::HashRecord>::from_fields("h", &fields)
+            .expect("legacy row must load");
+        assert_eq!(r.origin, RgbOrigin::Replaced);
     }
 }
