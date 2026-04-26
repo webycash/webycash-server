@@ -2,7 +2,7 @@
 //!
 //! Single integration point used by `asset-rgb` (server-side) and (via
 //! the same crate compiled to WASM) by webylib's `wallet-rgb`. Tracks
-//! https://docs.aluvm.org and https://www.contractum.org.
+//! <https://docs.aluvm.org> and <https://www.contractum.org>.
 //!
 //! State of M3.K:
 //!   - aluvm 0.12 is wired and we can execute compiled libraries from
