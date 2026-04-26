@@ -234,6 +234,15 @@ pub enum RecordOrigin {
     Replaced,
 }
 
+impl fmt::Display for RecordOrigin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RecordOrigin::Mined => f.write_str("mined"),
+            RecordOrigin::Replaced => f.write_str("replaced"),
+        }
+    }
+}
+
 /// Bridge from a parsed secret to the asset's storage record. Used by the
 /// `/replace` and `/mining_report` handlers in `server-core` to construct
 /// ledger entries without server-core needing to know each asset's record
@@ -343,5 +352,11 @@ mod tests {
             let err = ContractId::parse(bad).unwrap_err();
             assert!(matches!(err, AssetError::Parse(_)), "{bad:?} should reject");
         }
+    }
+
+    #[test]
+    fn record_origin_displays_lowercase() {
+        assert_eq!(RecordOrigin::Mined.to_string(), "mined");
+        assert_eq!(RecordOrigin::Replaced.to_string(), "replaced");
     }
 }
