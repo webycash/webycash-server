@@ -74,6 +74,43 @@ impl fmt::Display for PgpFingerprint {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ContractId(pub String);
 
+impl ContractId {
+    /// Parse a ContractId. Accepts the wire-format slug shape that
+    /// every flavor's nom parser also accepts:
+    ///   - 1..=64 chars
+    ///   - each char is alphanumeric, `-`, or `_`
+    ///
+    /// Bech32m strings (the RGB shape) and issuer-chosen series ids
+    /// (the Voucher shape) both fit inside this superset.
+    ///
+    /// ```
+    /// use webycash_asset_core::ContractId;
+    /// assert!(ContractId::parse("rgb20-usdc").is_ok());
+    /// assert!(ContractId::parse("credits-2026-q1").is_ok());
+    /// // empty / over-64 / disallowed punctuation reject
+    /// assert!(ContractId::parse("").is_err());
+    /// assert!(ContractId::parse(&"a".repeat(65)).is_err());
+    /// assert!(ContractId::parse("rgb20:usdc").is_err());
+    /// ```
+    pub fn parse(s: &str) -> Result<Self> {
+        if s.is_empty() {
+            return Err(AssetError::Parse("ContractId cannot be empty".into()));
+        }
+        if s.len() > 64 {
+            return Err(AssetError::Parse(format!(
+                "ContractId longer than 64 chars: {}",
+                s.len()
+            )));
+        }
+        if !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            return Err(AssetError::Parse(
+                "ContractId must be alphanumeric, '-', or '_'".into(),
+            ));
+        }
+        Ok(ContractId(s.to_string()))
+    }
+}
+
 impl fmt::Display for ContractId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
@@ -277,5 +314,34 @@ mod tests {
         let err = PgpFingerprint::parse("Aabbccddeeff00112233445566778899aabbccdd")
             .unwrap_err();
         assert!(matches!(err, AssetError::Parse(_)));
+    }
+
+    #[test]
+    fn contract_id_accepts_alphanumeric_dash_underscore() {
+        assert!(ContractId::parse("rgb20").is_ok());
+        assert!(ContractId::parse("rgb20-usdc").is_ok());
+        assert!(ContractId::parse("credits_2026_q1").is_ok());
+        assert!(ContractId::parse(&"a".repeat(64)).is_ok());
+        assert!(ContractId::parse("a").is_ok());
+    }
+
+    #[test]
+    fn contract_id_rejects_empty() {
+        let err = ContractId::parse("").unwrap_err();
+        assert!(matches!(err, AssetError::Parse(_)));
+    }
+
+    #[test]
+    fn contract_id_rejects_too_long() {
+        let err = ContractId::parse(&"a".repeat(65)).unwrap_err();
+        assert!(matches!(err, AssetError::Parse(_)));
+    }
+
+    #[test]
+    fn contract_id_rejects_punctuation() {
+        for bad in [":", ".", "/", " ", "rgb:usdc", "rgb.usdc", "rgb usdc"] {
+            let err = ContractId::parse(bad).unwrap_err();
+            assert!(matches!(err, AssetError::Parse(_)), "{bad:?} should reject");
+        }
     }
 }
