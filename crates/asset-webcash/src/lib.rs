@@ -45,6 +45,15 @@ pub enum WebcashOrigin {
     Replaced,
 }
 
+impl std::fmt::Display for WebcashOrigin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WebcashOrigin::Mined => f.write_str("mined"),
+            WebcashOrigin::Replaced => f.write_str("replaced"),
+        }
+    }
+}
+
 impl AssetRecord for WebcashRecord {}
 
 /// Webcash uses the historical Redis HASH field layout for backwards
@@ -349,5 +358,11 @@ mod tests {
         };
         let err = Webcash::build_records(&ctx).unwrap_err();
         assert!(matches!(err, webycash_asset_core::AssetError::Parse(_)));
+    }
+
+    #[test]
+    fn webcash_origin_displays_lowercase() {
+        assert_eq!(WebcashOrigin::Mined.to_string(), "mined");
+        assert_eq!(WebcashOrigin::Replaced.to_string(), "replaced");
     }
 }

@@ -46,6 +46,17 @@ pub enum RgbOrigin {
     Transferred,
 }
 
+impl std::fmt::Display for RgbOrigin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RgbOrigin::Mined => f.write_str("mined"),
+            RgbOrigin::Issued => f.write_str("issued"),
+            RgbOrigin::Replaced => f.write_str("replaced"),
+            RgbOrigin::Transferred => f.write_str("transferred"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RgbFungibleRecord {
     pub public_hash: String,
@@ -571,5 +582,13 @@ mod tests {
             matches!(&err, webycash_asset_core::AssetError::Invariant(msg) if msg.contains("issuer_fp")),
             "got {err:?}",
         );
+    }
+
+    #[test]
+    fn rgb_origin_displays_lowercase() {
+        assert_eq!(RgbOrigin::Mined.to_string(), "mined");
+        assert_eq!(RgbOrigin::Issued.to_string(), "issued");
+        assert_eq!(RgbOrigin::Replaced.to_string(), "replaced");
+        assert_eq!(RgbOrigin::Transferred.to_string(), "transferred");
     }
 }

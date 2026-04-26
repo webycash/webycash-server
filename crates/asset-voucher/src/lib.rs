@@ -31,6 +31,16 @@ pub enum VoucherOrigin {
     Replaced,
 }
 
+impl std::fmt::Display for VoucherOrigin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VoucherOrigin::Mined => f.write_str("mined"),
+            VoucherOrigin::Issued => f.write_str("issued"),
+            VoucherOrigin::Replaced => f.write_str("replaced"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VoucherRecord {
     pub public_hash: String,
@@ -304,5 +314,12 @@ mod tests {
             matches!(&err, webycash_asset_core::AssetError::Invariant(msg) if msg.contains("issuer_fp")),
             "got {err:?}",
         );
+    }
+
+    #[test]
+    fn voucher_origin_displays_lowercase() {
+        assert_eq!(VoucherOrigin::Mined.to_string(), "mined");
+        assert_eq!(VoucherOrigin::Issued.to_string(), "issued");
+        assert_eq!(VoucherOrigin::Replaced.to_string(), "replaced");
     }
 }
