@@ -41,6 +41,9 @@ impl std::fmt::Display for VoucherOrigin {
     }
 }
 
+/// In-DB record for a voucher. Same shape as RGB20 (amount + spent
+/// state + namespace + provenance) — vouchers are always splittable
+/// bearer credits issued under an `(contract_id, issuer_fp)` pair.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VoucherRecord {
     pub public_hash: String,
@@ -114,11 +117,18 @@ impl webycash_storage::HashRecord for VoucherRecord {
 
 /// Issuance context: PoW preimage AND/OR operator-signed envelope.
 /// At runtime the server checks which mode is active and validates accordingly.
+///
+/// `MintableAsset::IssuanceContext` for the voucher flavor: a batch
+/// of pre-built records destined for the ledger via `/api/v1/issue`
+/// (after Ed25519 signature verification).
 #[derive(Debug, Clone)]
 pub struct VoucherIssuance {
     pub records: Vec<VoucherRecord>,
 }
 
+/// Zero-sized type identifying the voucher asset flavor.
+/// Implements `Asset + SplittableAsset + IssuedAsset + MintableAsset
+/// + RecordBuilder` for `Server<Voucher, _>`.
 pub struct Voucher;
 
 impl Asset for Voucher {
