@@ -85,6 +85,9 @@ pub struct Server<A: Asset, S: LedgerStore<A>> {
 }
 
 impl<A: Asset, S: LedgerStore<A>> Server<A, S> {
+    /// Build a fresh `Server` with the given config + storage backend.
+    /// Issuers default to `None` — the binary calls `with_issuers` if
+    /// `/api/v1/issue` should be enabled (RGB / Voucher path).
     pub fn new(config: ServeConfig, store: S) -> Self {
         Self {
             config,
@@ -95,6 +98,9 @@ impl<A: Asset, S: LedgerStore<A>> Server<A, S> {
         }
     }
 
+    /// Attach an `IssuerRegistry`. After this call, `/api/v1/issue`
+    /// will accept signed mints from the registered fingerprints;
+    /// without it, the handler returns 503.
     pub fn with_issuers(mut self, issuers: IssuerRegistry) -> Self {
         self.issuers = Some(Arc::new(issuers));
         self
