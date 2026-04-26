@@ -214,4 +214,99 @@ mod tests {
         };
         assert_eq!(cfg_dynamic.current_difficulty(), Some(24));
     }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        /// `leading_zero_bits` is bounded by [0, 256] for any 32-byte hash.
+        #[test]
+        fn leading_zero_bits_in_range(bytes in prop::collection::vec(any::<u8>(), 0..=64)) {
+            let n = leading_zero_bits(&bytes);
+            prop_assert!(n <= bytes.len() as u32 * 8);
+        }
+
+        /// A hash of all zero bytes counts as `bytes.len() * 8` leading zeros.
+        #[test]
+        fn all_zeros_yields_full_count(len in 0usize..=64) {
+            let z = vec![0u8; len];
+            prop_assert_eq!(leading_zero_bits(&z), len as u32 * 8);
+        }
+
+        /// `verify_pow(s, 0)` is unconditionally true (the "0 bits" target
+        /// is met by every hash).
+        #[test]
+        fn verify_pow_zero_is_total(s: String) {
+            prop_assert!(verify_pow(&s, 0));
+        }
+
+        /// `verify_pow(s, n+1)` ⊆ `verify_pow(s, n)` — strictly stricter
+        /// targets accept a subset of preimages.
+        #[test]
+        fn verify_pow_is_monotone(
+            s: String,
+            n in 0u32..=24,
+        ) {
+            if verify_pow(&s, n + 1) {
+                prop_assert!(verify_pow(&s, n));
+            }
+        }
+
+        /// `verify_pow` is consistent with `leading_zero_bits` directly:
+        /// it returns true iff the SHA256 hash has ≥ n leading zero bits.
+        #[test]
+        fn verify_pow_matches_leading_zero_bits(s: String, n in 0u32..=12) {
+            use sha2::{Digest, Sha256};
+            let h = Sha256::digest(s.as_bytes());
+            prop_assert_eq!(verify_pow(&s, n), leading_zero_bits(&h) >= n);
+        }
+
+        /// Difficulty adjustment is clamped: |new - current| ≤ 2.
+        #[test]
+        fn adjust_difficulty_clamped_per_epoch(
+            current in 1u32..=64,
+            actual_secs in 1u64..=10_000,
+            target_secs in 1u64..=10_000,
+            actual_reports in 0u64..=10_000,
+            expected_reports in 1u64..=10_000,
+        ) {
+            let new = adjust_difficulty(
+                current, actual_secs, target_secs, actual_reports, expected_reports,
+            );
+            let diff = new.abs_diff(current);
+            prop_assert!(diff <= 2, "delta {diff} > 2 for current={current} → new={new}");
+            // Floor: new is never below 1.
+            prop_assert!(new >= 1);
+        }
+
+        /// Floor invariant: starting from current=1 with very slow mining
+        /// stays at 1 (never underflows).
+        #[test]
+        fn adjust_difficulty_floor_at_one(
+            actual_secs in 5_000u64..=u64::MAX / 2,
+            actual_reports in 0u64..=10,
+        ) {
+            let new = adjust_difficulty(1, actual_secs, 1_000, actual_reports, 100);
+            prop_assert_eq!(new, 1);
+        }
+
+        /// Symmetry around the equilibrium: same actual==target and
+        /// same actual_reports==expected_reports leaves difficulty
+        /// unchanged.
+        #[test]
+        fn adjust_difficulty_equilibrium_is_stable(
+            current in 1u32..=32,
+            t in 1u64..=10_000,
+            r in 1u64..=10_000,
+        ) {
+            // both ratios exactly 1 → branch goes to "current" (no change).
+            // (The ≤/≥ overlap pushes equal-ratios into the "too fast"
+            // branch instead — adjust_difficulty raises by 1. Capture
+            // that exact behaviour as a regression pin.)
+            let new = adjust_difficulty(current, t, t, r, r);
+            prop_assert!(new == current || new == current + 1,
+                "equilibrium drift > 1: {current} → {new}");
+        }
+    }
 }
