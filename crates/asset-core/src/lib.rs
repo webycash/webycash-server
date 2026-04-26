@@ -206,9 +206,13 @@ pub trait TransferableAsset: Asset {
 /// outputs to share the same `(contract_id, issuer)` pair (server enforces
 /// atomically; client-side wallets can pre-flight the same check).
 pub trait IssuedAsset: Asset {
+    /// Issuer fingerprint borrowed from a parsed secret.
     fn issuer(secret: &Self::Secret) -> &PgpFingerprint;
+    /// Issuer fingerprint borrowed from a parsed public token.
     fn issuer_public(public: &Self::Public) -> &PgpFingerprint;
+    /// Contract id borrowed from a parsed secret.
     fn contract_id(secret: &Self::Secret) -> &ContractId;
+    /// Contract id borrowed from a parsed public token.
     fn contract_id_public(public: &Self::Public) -> &ContractId;
 }
 
@@ -256,6 +260,8 @@ impl fmt::Display for RecordOrigin {
 /// flavors (RGB, Voucher) report their `(contract_id, issuer_fp)`
 /// partition. Webcash uses the default (unscoped) implementation.
 pub trait RecordBuilder: SplittableAsset {
+    /// Build the storage record corresponding to a parsed secret,
+    /// tagged with how the record entered the ledger.
     fn record_from_secret(secret: &Self::Secret, origin: RecordOrigin) -> Self::Record;
 
     /// Returns `(contract_id, issuer_fp)` for a secret, if the asset is
