@@ -202,8 +202,9 @@ pub trait TransferableAsset: Asset {
 /// Assets whose secrets carry an issuer's PGP fingerprint and an issuer-scoped
 /// contract identifier. Webcash does NOT implement this; RGB and Voucher do.
 ///
-/// Replace and transfer operations on `IssuedAsset` types require all inputs
-/// and all outputs to share the same `(contract_id, issuer)` pair.
+/// `/api/v1/replace` on `IssuedAsset` types requires all inputs and all
+/// outputs to share the same `(contract_id, issuer)` pair (server enforces
+/// atomically; client-side wallets can pre-flight the same check).
 pub trait IssuedAsset: Asset {
     fn issuer(secret: &Self::Secret) -> &PgpFingerprint;
     fn issuer_public(public: &Self::Public) -> &PgpFingerprint;
@@ -271,7 +272,8 @@ pub trait RecordBuilder: SplittableAsset {
 }
 
 /// Analog of `RecordBuilder` for non-splittable / collectible (NFT) assets.
-/// `RgbCollectible` implements this; the `/transfer` handler uses it.
+/// `RgbCollectible` implements this; the collectible `/api/v1/replace`
+/// handler (1:1 arity) uses it instead of the splittable variant.
 pub trait CollectibleRecordBuilder: TransferableAsset {
     fn record_from_secret(secret: &Self::Secret, origin: RecordOrigin) -> Self::Record;
 

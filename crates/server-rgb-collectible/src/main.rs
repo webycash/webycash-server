@@ -1,10 +1,14 @@
 //! RGB21 collectible (NFT) flavor binary.
 //!
 //! Boots `Server<RgbCollectible, S>` and dispatches via
-//! `serve_collectible()` in server-core. Non-splittable: exposes
-//! `/api/v1/transfer` (1:1 ownership move) instead of `/replace`, and
-//! `/api/v1/burn_collectible` instead of `/burn`. Issuer-signed mint via
-//! `/api/v1/issue` shares the same Ed25519 envelope as RGB20 / Voucher.
+//! `serve_collectible()` in server-core. Same endpoint surface as the
+//! splittable flavors — `/api/v1/replace` for writes, `/api/v1/burn`
+//! for destruction — but the handler enforces 1:1 arity (single input,
+//! single output, same namespace) instead of an N:M conservation law.
+//!
+//! `/api/v1/mining_report` is statically absent: collectibles can't be
+//! PoW-mined; issuance is operator-signed only via `/api/v1/issue`
+//! (Ed25519 envelope shared with RGB20 / Voucher).
 
 use std::net::SocketAddr;
 use std::str::FromStr;
