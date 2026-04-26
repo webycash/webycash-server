@@ -46,13 +46,21 @@ impl std::fmt::Display for VoucherOrigin {
 /// bearer credits issued under an `(contract_id, issuer_fp)` pair.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VoucherRecord {
+    /// The token's public hash — primary key within its namespace.
     pub public_hash: String,
+    /// Amount in atomic units (8-decimal wats).
     pub amount_wats: i64,
+    /// `true` once consumed by /replace or /burn.
     pub spent: bool,
+    /// Wall-clock when the record was inserted.
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Wall-clock when the spent transition fired; `None` while unspent.
     pub spent_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// How the record entered the ledger (mined / issued / replaced).
     pub origin: VoucherOrigin,
+    /// Issuer-chosen contract id this voucher belongs to.
     pub contract_id: ContractId,
+    /// Issuer's PGP V4 fingerprint.
     pub issuer_fp: PgpFingerprint,
 }
 
@@ -123,6 +131,8 @@ impl webycash_storage::HashRecord for VoucherRecord {
 /// (after Ed25519 signature verification).
 #[derive(Debug, Clone)]
 pub struct VoucherIssuance {
+    /// Records to insert. Every record must share the same
+    /// `(contract_id, issuer_fp)` (verify_issuance enforces this).
     pub records: Vec<VoucherRecord>,
 }
 

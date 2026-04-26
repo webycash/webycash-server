@@ -23,18 +23,26 @@ use webycash_proto::parsers::{amount_parser, hex64};
 /// `e{amount}:secret:{hex64}:{contract_id}:{issuer_pgp_fp}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecretVoucher {
+    /// Token amount in atomic units.
     pub amount: Amount,
+    /// 64-char hex secret material.
     pub secret: String,
+    /// Issuer-chosen contract id.
     pub contract_id: ContractId,
+    /// Issuer's PGP V4 fingerprint.
     pub issuer_fp: PgpFingerprint,
 }
 
 /// `e{amount}:public:{sha256_hex}:{contract_id}:{issuer_pgp_fp}`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PublicVoucher {
+    /// Token amount in atomic units.
     pub amount: Amount,
+    /// 64-char hex SHA256 of the secret bytes.
     pub hash: String,
+    /// Issuer-chosen contract id.
     pub contract_id: ContractId,
+    /// Issuer's PGP V4 fingerprint.
     pub issuer_fp: PgpFingerprint,
 }
 
@@ -72,6 +80,7 @@ impl SecretVoucher {
 }
 
 impl PublicVoucher {
+    /// Parse a public voucher token from its canonical wire form.
     pub fn parse(s: &str) -> Result<Self, TokenError> {
         Self::from_str(s)
     }
@@ -98,9 +107,13 @@ impl fmt::Display for PublicVoucher {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Wire-format parse failure for voucher tokens.
 pub enum TokenError {
+    /// Input didn't match the canonical
+    /// `e{amount}:secret:{hex64}:{contract}:{fp}` shape.
     #[error("invalid voucher token format: {0}")]
     InvalidFormat(String),
+    /// Amount segment failed to parse as 8-decimal fixed-point.
     #[error("invalid amount: {0}")]
     InvalidAmount(String),
 }
