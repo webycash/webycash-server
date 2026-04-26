@@ -35,4 +35,13 @@ COPY --from=build /server /usr/local/bin/server
 COPY config/ /etc/webycash/
 EXPOSE 8080
 ENV WEBYCASH_FLAVOR=${FLAVOR}
+
+# Liveness probe: GET /api/v1/target. Every flavor exposes it; the
+# response carries `difficulty_target_bits` whether the binary is
+# webcash, rgb, rgb-collectible, or voucher. wget is BusyBox-bundled
+# in alpine, so no extra package install is needed.
+HEALTHCHECK --interval=15s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget -q -O - http://127.0.0.1:8080/api/v1/target \
+        | grep -q difficulty_target_bits || exit 1
+
 ENTRYPOINT ["server"]
