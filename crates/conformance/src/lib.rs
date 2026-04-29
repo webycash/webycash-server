@@ -22,40 +22,58 @@ pub mod fixtures {
     /// `fixtures/webcash_org_production/*.json`.
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct Fixture {
+        /// Wall-clock when this request/response was captured.
         pub captured_at: String,
+        /// Captured HTTP request that was sent to webcash.org.
         pub request: Request,
+        /// Captured HTTP response.
         pub response: Response,
+        /// Free-form notes about quirks worth preserving.
         #[serde(default)]
         pub notes: Vec<String>,
     }
 
+    /// Captured HTTP request.
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct Request {
+        /// HTTP method (`GET`, `POST`, ...).
         pub method: String,
+        /// Full request URL.
         pub url: String,
+        /// Request headers as captured.
         #[serde(default)]
         pub headers: BTreeMap<String, String>,
+        /// Parsed JSON body (when applicable).
         #[serde(default)]
         pub body: Option<serde_json::Value>,
+        /// Raw body bytes (when JSON parse wasn't applicable / wanted).
         #[serde(default)]
         pub body_raw: Option<String>,
     }
 
+    /// Captured HTTP response.
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct Response {
+        /// HTTP status code.
         pub status: u16,
+        /// Response headers as captured (Content-Type drives the
+        /// Tornado-quirk invariants).
         #[serde(default)]
         pub headers: BTreeMap<String, String>,
+        /// Raw response body bytes.
         #[serde(default)]
         pub body_raw: Option<String>,
+        /// Parsed JSON body (when applicable).
         #[serde(default)]
         pub body_parsed: Option<serde_json::Value>,
         /// Only present for fixtures whose body is stored in a sibling file
         /// (e.g., the multi-KB Terms of Service text).
         #[serde(default)]
         pub body_file: Option<String>,
+        /// SHA256 of the response body, hex-encoded.
         #[serde(default)]
         pub body_sha256: Option<String>,
+        /// Response body length in bytes.
         #[serde(default)]
         pub body_length: Option<usize>,
     }
@@ -102,12 +120,16 @@ pub mod fixtures {
         Ok(out)
     }
 
+    /// Failure modes when loading a fixture from disk.
     #[derive(Debug, thiserror::Error)]
     pub enum FixtureError {
+        /// `std::fs::read` failed for the given path.
         #[error("io error reading {0}: {1}")]
         Io(PathBuf, std::io::Error),
+        /// `serde_json::from_slice` failed for the given path.
         #[error("parse error in {0}: {1}")]
         Parse(PathBuf, serde_json::Error),
+        /// Path didn't have a parseable file stem.
         #[error("invalid fixture filename: {0}")]
         BadName(PathBuf),
     }

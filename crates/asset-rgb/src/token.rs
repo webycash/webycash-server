@@ -30,23 +30,34 @@ use webycash_proto::parsers::{amount_parser, hex64};
 // RGB20 fungible (splittable)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// RGB20 fungible secret: `e{amount}:secret:{hex64}:{contract}:{fp}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecretFungible {
+    /// Token amount in atomic units.
     pub amount: Amount,
+    /// 64-char hex secret material.
     pub secret: String,
+    /// RGB20 contract id.
     pub contract_id: ContractId,
+    /// Issuer's PGP V4 fingerprint.
     pub issuer_fp: PgpFingerprint,
 }
 
+/// RGB20 fungible public form: `e{amount}:public:{sha256_hex}:{contract}:{fp}`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PublicFungible {
+    /// Token amount in atomic units.
     pub amount: Amount,
+    /// 64-char hex SHA256 of the secret bytes.
     pub hash: String,
+    /// RGB20 contract id.
     pub contract_id: ContractId,
+    /// Issuer's PGP V4 fingerprint.
     pub issuer_fp: PgpFingerprint,
 }
 
 impl SecretFungible {
+    /// Derive the public-form token by hashing the secret material.
     pub fn to_public(&self) -> PublicFungible {
         let hash = Sha256::digest(self.secret.as_bytes());
         PublicFungible {
@@ -77,6 +88,7 @@ impl SecretFungible {
 }
 
 impl PublicFungible {
+    /// Parse a public RGB20 fungible token from its wire form.
     pub fn parse(s: &str) -> Result<Self, TokenError> {
         Self::from_str(s)
     }
@@ -130,21 +142,31 @@ impl FromStr for PublicFungible {
 // RGB21 NFT (non-splittable; no amount segment)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// RGB21 collectible secret: `secret:{hex64}:{contract_id}:{issuer_fp}`.
+/// NO leading `e{amount}:` segment — collectibles are non-splittable.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecretCollectible {
+    /// 64-char hex secret material.
     pub secret: String,
+    /// RGB21 contract id.
     pub contract_id: ContractId,
+    /// Issuer's PGP V4 fingerprint.
     pub issuer_fp: PgpFingerprint,
 }
 
+/// RGB21 collectible public form: `public:{sha256_hex}:{contract}:{fp}`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PublicCollectible {
+    /// 64-char hex SHA256 of the secret bytes.
     pub hash: String,
+    /// RGB21 contract id.
     pub contract_id: ContractId,
+    /// Issuer's PGP V4 fingerprint.
     pub issuer_fp: PgpFingerprint,
 }
 
 impl SecretCollectible {
+    /// Derive the public-form token by hashing the secret material.
     pub fn to_public(&self) -> PublicCollectible {
         let hash = Sha256::digest(self.secret.as_bytes());
         PublicCollectible {
@@ -178,6 +200,7 @@ impl SecretCollectible {
 }
 
 impl PublicCollectible {
+    /// Parse a public RGB21 collectible token from its wire form.
     pub fn parse(s: &str) -> Result<Self, TokenError> {
         Self::from_str(s)
     }
@@ -231,8 +254,12 @@ impl FromStr for PublicCollectible {
 // Errors + parsers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Wire-format parse failure for RGB20 / RGB21 tokens.
 #[derive(Debug, thiserror::Error)]
 pub enum TokenError {
+    /// Input didn't match the canonical wire shape (RGB20:
+    /// `e{amount}:secret:{hex}:{contract}:{fp}`; RGB21:
+    /// `secret:{hex}:{contract}:{fp}`).
     #[error("invalid RGB token format: {0}")]
     InvalidFormat(String),
 }

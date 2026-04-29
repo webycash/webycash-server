@@ -37,11 +37,16 @@ use webycash_asset_core::{
 // Origin tags + records
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// How an RGB record entered the ledger. Serialised as lowercase
+/// in storage (`mined` / `issued` / `replaced`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RgbOrigin {
+    /// Created via PoW mining_report (RGB20 only — RGB21 can't mine).
     Mined,
+    /// Created via signed operator /issue.
     Issued,
+    /// Created by /replace (split for RGB20, 1:1 transfer for RGB21).
     Replaced,
 }
 
@@ -60,13 +65,21 @@ impl std::fmt::Display for RgbOrigin {
 /// and provenance (mined / issued / replaced).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RgbFungibleRecord {
+    /// Token public hash — primary key within its namespace.
     pub public_hash: String,
+    /// Amount in atomic units (8-decimal wats).
     pub amount_wats: i64,
+    /// `true` once consumed by /replace or /burn.
     pub spent: bool,
+    /// Wall-clock when the record was inserted.
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Wall-clock when the spent transition fired.
     pub spent_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// How this record entered the ledger.
     pub origin: RgbOrigin,
+    /// RGB contract id (rgb20 stringified bech32m-without-checksum).
     pub contract_id: ContractId,
+    /// Issuer's PGP V4 fingerprint.
     pub issuer_fp: PgpFingerprint,
 }
 
@@ -141,12 +154,19 @@ impl webycash_storage::HashRecord for RgbFungibleRecord {
 /// both flavors).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RgbCollectibleRecord {
+    /// Token public hash — primary key within its namespace.
     pub public_hash: String,
+    /// `true` once consumed by /replace or /burn.
     pub spent: bool,
+    /// Wall-clock when the record was inserted.
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Wall-clock when the spent transition fired.
     pub spent_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// How this record entered the ledger.
     pub origin: RgbOrigin,
+    /// RGB21 contract id.
     pub contract_id: ContractId,
+    /// Issuer's PGP V4 fingerprint.
     pub issuer_fp: PgpFingerprint,
 }
 
@@ -226,6 +246,8 @@ impl webycash_storage::HashRecord for RgbCollectibleRecord {
 /// genesis transition validation.
 #[derive(Debug, Clone)]
 pub struct RgbFungibleIssuance {
+    /// Records to insert. Every record must share the same
+    /// `(contract_id, issuer_fp)` (verify_issuance enforces).
     pub records: Vec<RgbFungibleRecord>,
 }
 
@@ -233,6 +255,8 @@ pub struct RgbFungibleIssuance {
 /// record represents one NFT to mint.
 #[derive(Debug, Clone)]
 pub struct RgbCollectibleIssuance {
+    /// Records to insert. Every record must share the same
+    /// `(contract_id, issuer_fp)`; one record per NFT.
     pub records: Vec<RgbCollectibleRecord>,
 }
 
