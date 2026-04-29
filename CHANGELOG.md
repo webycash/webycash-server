@@ -101,6 +101,10 @@ flavor's wire-format and storage shape.
   - Webylib-side: `webylib-wallet-{webcash,rgb,voucher}`,
     `webylib-server-client`, `webylib-cli`, `webylib-storage`.
 - `cargo doc --no-deps` is warning-clean across both workspaces.
+- **All 12 server-side new crates pass the strict
+  `RUSTDOCFLAGS="-W missing-docs" cargo doc --no-deps` lint** —
+  every public struct field, enum variant, type alias, trait
+  associated type, and trait method carries rustdoc explicitly.
 
 ### Deployment
 - `Dockerfile.flavor` parameterised by `FLAVOR` build-arg; one image
