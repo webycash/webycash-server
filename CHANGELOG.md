@@ -105,6 +105,11 @@ flavor's wire-format and storage shape.
   `RUSTDOCFLAGS="-W missing-docs" cargo doc --no-deps` lint** —
   every public struct field, enum variant, type alias, trait
   associated type, and trait method carries rustdoc explicitly.
+- **All 7 webylib-side new crates also pass strict-docs**
+  (`webylib-wallet-{webcash,rgb,voucher}`, `webylib-server-client`,
+  `webylib-cli`, `webylib-storage`, `webylib-wasm`). webylib-wasm
+  uses `#![allow(missing_docs)]` since its user-visible API is the
+  wasm-bindgen-generated JS / .d.ts surface, not the Rust types.
 
 ### Deployment
 - `Dockerfile.flavor` parameterised by `FLAVOR` build-arg; one image
