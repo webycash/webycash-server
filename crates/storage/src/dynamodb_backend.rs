@@ -27,6 +27,8 @@ use crate::{
 // require ExpressionAttributeNames in every condition. `pk` is not reserved.
 const PK: &str = "pk";
 
+/// DynamoDB-backed `LedgerStore`. Tables are suffixed by `DEPLOYMENT_ENV`
+/// (defaults to `-testnet`) so prod and testnet share an account safely.
 pub struct DynamoDbStore<A: Asset, K: KeyStrategy> {
     client: Client,
     tokens_table: String,
@@ -54,6 +56,8 @@ impl<A: Asset, K: KeyStrategy> DynamoDbStore<A, K> {
         }
     }
 
+    /// Create any missing tables (tokens / mining / audit) with on-demand
+    /// billing. Idempotent — existing tables are left as-is.
     pub async fn ensure_tables(&self) -> anyhow::Result<()> {
         use aws_sdk_dynamodb::types::{
             AttributeDefinition, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType,

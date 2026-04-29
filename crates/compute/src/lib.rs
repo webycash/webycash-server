@@ -8,6 +8,7 @@
 //! GPU backends (CUDA, wgpu) are wired in M1.D alongside the binary.
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};

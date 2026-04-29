@@ -11,6 +11,9 @@
 //!    cross-checks against production webcash.org. Stub in `live_smoke`;
 //!    populated in M1.
 
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+
 pub mod fixtures {
     //! Loader for the captured production fixtures in `fixtures/webcash_org_production/`.
 

@@ -13,6 +13,7 @@
 //!   - `redis-fdb` → composite, planned
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 use std::collections::HashMap;
 use std::marker::PhantomData;

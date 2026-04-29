@@ -10,6 +10,7 @@
 //! `asset-*` crates and reuse the parsers exposed here.
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 pub mod parsers;
 

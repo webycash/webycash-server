@@ -12,6 +12,7 @@
 //! Used by the `MintableAsset::verify_issuance` impls in the asset crates.
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

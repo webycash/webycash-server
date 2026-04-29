@@ -66,6 +66,12 @@ redis.call('SET', ak, aj)
 return 'ok'
 "#;
 
+/// Redis-backed `LedgerStore` implementation.
+///
+/// Uses a small connection pool (`POOL_SIZE`) and pre-loaded Lua scripts for
+/// atomic replace and burn operations. Generic over the asset (`A`) and
+/// key strategy (`K`) so the same code path serves Webcash legacy keys and
+/// the namespaced `(asset, contract, issuer)` keys for RGB/Voucher.
 pub struct RedisStore<A: Asset, K: KeyStrategy> {
     conns: Vec<redis::aio::ConnectionManager>,
     conn_idx: std::sync::atomic::AtomicUsize,
@@ -76,6 +82,8 @@ pub struct RedisStore<A: Asset, K: KeyStrategy> {
 }
 
 impl<A: Asset, K: KeyStrategy> RedisStore<A, K> {
+    /// Open a new pool against `url`, load the Lua scripts, and return a
+    /// store ready to serve requests.
     pub async fn new(url: &str, keys: K) -> anyhow::Result<Self> {
         let client = redis::Client::open(url)?;
         let conns = futures::future::try_join_all(

@@ -17,6 +17,7 @@
 //! | `/api/v1/issuer/{fp}/stats`    | `IssuedAsset`                                  |
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 pub mod amount;
 

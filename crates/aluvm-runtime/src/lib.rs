@@ -23,6 +23,7 @@
 //! executed and its accept/reject status checked.
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 // The aluasm! macro expands to code that references the `alloc` crate.
 // Pulling it in is harmless on std targets and required when this crate

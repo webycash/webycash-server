@@ -11,6 +11,7 @@
 //! key distribution while we land the PGP layer.
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;

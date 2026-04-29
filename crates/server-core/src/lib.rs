@@ -16,6 +16,7 @@
 //! | `GET  /terms`, `/terms/text` | (none)                       |
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 use std::convert::Infallible;
 use std::marker::PhantomData;
