@@ -81,15 +81,29 @@ impl<A: Asset, K: KeyStrategy> DynamoDbStore<A, K> {
                 .attribute_name(PK)
                 .key_type(KeyType::Hash)
                 .build()?;
-            self.client
+            match self.client
                 .create_table()
                 .table_name(name)
                 .attribute_definitions(attr)
                 .key_schema(key)
                 .billing_mode(BillingMode::PayPerRequest)
                 .send()
-                .await?;
-            tracing::info!(table = %name, "created DynamoDB table");
+                .await
+            {
+                Ok(_) => tracing::info!(table = %name, "created DynamoDB table"),
+                Err(e) => {
+                    // Race with another worker: idempotent — another instance
+                    // (parallel replica, sibling server flavor sharing the
+                    // same DynamoDB Local in compose) created the table after
+                    // our describe_table check but before our create_table.
+                    let svc = e.into_service_error();
+                    if svc.is_resource_in_use_exception() {
+                        tracing::debug!(table = %name, "table already exists (race)");
+                    } else {
+                        return Err(anyhow::Error::new(svc));
+                    }
+                }
+            }
 
             // DynamoDB Local creates tables synchronously; real AWS may need
             // a brief wait. Defer that to the caller — this loop is best-effort.
