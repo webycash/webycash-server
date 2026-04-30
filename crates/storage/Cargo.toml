@@ -34,3 +34,4 @@ foundationdb = { workspace = true, optional = true }
 
 futures = { workspace = true }
 tracing = { workspace = true }
+tokio = { workspace = true }

@@ -27,6 +27,33 @@ use crate::{
 // require ExpressionAttributeNames in every condition. `pk` is not reserved.
 const PK: &str = "pk";
 
+/// Walks `aws_sdk_dynamodb::error::SdkError` for the underlying service-level
+/// `ResourceNotFoundException`. Used to distinguish "table doesn't exist yet"
+/// (recoverable — go create it) from transport / dispatch failures.
+fn is_resource_not_found<E, R>(e: &aws_sdk_dynamodb::error::SdkError<E, R>) -> bool
+where
+    E: std::fmt::Debug,
+{
+    matches!(
+        e,
+        aws_sdk_dynamodb::error::SdkError::ServiceError(svc)
+            if format!("{:?}", svc.err()).contains("ResourceNotFound")
+    )
+}
+
+/// Same shape as `is_resource_not_found`, but for the `ResourceInUseException`
+/// raised when another worker already created the table.
+fn is_resource_in_use<E, R>(e: &aws_sdk_dynamodb::error::SdkError<E, R>) -> bool
+where
+    E: std::fmt::Debug,
+{
+    matches!(
+        e,
+        aws_sdk_dynamodb::error::SdkError::ServiceError(svc)
+            if format!("{:?}", svc.err()).contains("ResourceInUse")
+    )
+}
+
 /// DynamoDB-backed `LedgerStore`. Tables are suffixed by `DEPLOYMENT_ENV`
 /// (defaults to `-testnet`) so prod and testnet share an account safely.
 pub struct DynamoDbStore<A: Asset, K: KeyStrategy> {
@@ -62,53 +89,75 @@ impl<A: Asset, K: KeyStrategy> DynamoDbStore<A, K> {
         use aws_sdk_dynamodb::types::{
             AttributeDefinition, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType,
         };
-        for name in [&self.tokens_table, &self.mining_table, &self.audit_table] {
-            if self
-                .client
-                .describe_table()
-                .table_name(name)
-                .send()
-                .await
-                .is_ok()
-            {
-                continue;
-            }
-            let attr = AttributeDefinition::builder()
-                .attribute_name(PK)
-                .attribute_type(ScalarAttributeType::S)
-                .build()?;
-            let key = KeySchemaElement::builder()
-                .attribute_name(PK)
-                .key_type(KeyType::Hash)
-                .build()?;
-            match self.client
-                .create_table()
-                .table_name(name)
-                .attribute_definitions(attr)
-                .key_schema(key)
-                .billing_mode(BillingMode::PayPerRequest)
-                .send()
-                .await
-            {
-                Ok(_) => tracing::info!(table = %name, "created DynamoDB table"),
-                Err(e) => {
-                    // Race with another worker: idempotent — another instance
-                    // (parallel replica, sibling server flavor sharing the
-                    // same DynamoDB Local in compose) created the table after
-                    // our describe_table check but before our create_table.
-                    let svc = e.into_service_error();
-                    if svc.is_resource_in_use_exception() {
-                        tracing::debug!(table = %name, "table already exists (race)");
-                    } else {
-                        return Err(anyhow::Error::new(svc));
+        // Boot-time backoff: in compose stacks the DynamoDB Local container can
+        // be a few hundred ms behind us starting up. Retry the whole sequence a
+        // small number of times before giving up.
+        let mut attempt = 0u32;
+        loop {
+            attempt += 1;
+            let mut transient_err: Option<anyhow::Error> = None;
+            for name in [&self.tokens_table, &self.mining_table, &self.audit_table] {
+                match self.client.describe_table().table_name(name).send().await {
+                    Ok(_) => continue,
+                    Err(e) => {
+                        // Distinguish "table doesn't exist yet" (proceed to
+                        // create) from connection errors (retry the whole
+                        // sequence after a short backoff).
+                        if !is_resource_not_found(&e) {
+                            transient_err = Some(anyhow::Error::msg(format!(
+                                "describe_table {name}: {e}"
+                            )));
+                            break;
+                        }
+                    }
+                }
+                let attr = AttributeDefinition::builder()
+                    .attribute_name(PK)
+                    .attribute_type(ScalarAttributeType::S)
+                    .build()?;
+                let key = KeySchemaElement::builder()
+                    .attribute_name(PK)
+                    .key_type(KeyType::Hash)
+                    .build()?;
+                match self
+                    .client
+                    .create_table()
+                    .table_name(name)
+                    .attribute_definitions(attr)
+                    .key_schema(key)
+                    .billing_mode(BillingMode::PayPerRequest)
+                    .send()
+                    .await
+                {
+                    Ok(_) => tracing::info!(table = %name, "created DynamoDB table"),
+                    Err(e) => {
+                        // Race with another worker: idempotent — another
+                        // instance (parallel replica, sibling server flavor
+                        // sharing the same DynamoDB Local in compose) created
+                        // the table after our describe_table check but before
+                        // our create_table.
+                        if is_resource_in_use(&e) {
+                            tracing::debug!(table = %name, "table already exists (race)");
+                        } else {
+                            transient_err = Some(anyhow::Error::msg(format!(
+                                "create_table {name}: {e}"
+                            )));
+                            break;
+                        }
                     }
                 }
             }
-
-            // DynamoDB Local creates tables synchronously; real AWS may need
-            // a brief wait. Defer that to the caller — this loop is best-effort.
+            match transient_err {
+                None => return Ok(()),
+                Some(e) if attempt >= 10 => return Err(e),
+                Some(_) => {
+                    let backoff =
+                        std::time::Duration::from_millis(200u64 * (1 << attempt.min(5)));
+                    tracing::warn!(?attempt, ?backoff, "ensure_tables transient error, retrying");
+                    tokio::time::sleep(backoff).await;
+                }
+            }
         }
-        Ok(())
     }
 
     fn item_for(&self, namespace: &Namespace, record: &A::Record) -> HashMap<String, AttributeValue>
