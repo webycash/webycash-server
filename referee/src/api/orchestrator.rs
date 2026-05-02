@@ -5,20 +5,32 @@
 //! store, ZKP verifier, MuSig2 signer). The state-transition layer
 //! (`crate::state::transitions`) stays pure.
 //!
-//! ## Sync vs spawned forms
+//! ## Stateless / Lambda-friendly entry points
+//!
+//! All state lives in the configured [`SwapStore`] / [`AuditLog`]
+//! backend (Redis, DynamoDB, FoundationDB). The orchestrator holds NO
+//! in-memory swap state across calls — every method reads from the
+//! store, makes a single transition, and writes back. This is the
+//! contract Lambda needs.
 //!
 //! Two entry points:
 //!
-//! - [`Orchestrator::run_swap`] — runs the full state machine in the
-//!   caller's task. Returns a [`SwapOutcome`] when the swap reaches
-//!   terminal state. Tests use this; production does NOT (an HTTP request
-//!   that drives the whole swap could block for many seconds while
-//!   pre/post-checking the webcash leg).
-//! - [`Orchestrator::start_swap`] — generates a fresh `SwapId`, persists a
-//!   minimal placeholder so `GET /v1/swap/{id}/poll` can find the swap,
-//!   then `tokio::spawn`s [`run_swap`] in the background and returns the
-//!   id immediately. Production HTTP path uses this so `/v1/swap/initiate`
-//!   stays responsive.
+//! - [`Orchestrator::start_swap`] — synchronous. Generates a fresh
+//!   `SwapId`, persists `init`, verifies both ZKPs, runs the
+//!   pre-check, dispatches the first `insert` push. Returns once the
+//!   swap is in `insert-pushed`. Idempotent on retry: each call
+//!   either advances the state or, if the swap is already past that
+//!   phase, returns the existing id without redoing work.
+//! - [`Orchestrator::advance_swap`] — synchronous, idempotent. Runs
+//!   ONE iteration of the post-check loop: read swap from store,
+//!   call webcash health-check, settle / retry-push / abort+refund as
+//!   appropriate, persist the new phase. Lambda invokes this on a
+//!   schedule (EventBridge, SQS) for each in-flight swap; each call
+//!   is one transition — no background tasks, no pending futures.
+//! - [`Orchestrator::run_swap`] — runs `start_swap` + repeated
+//!   `advance_swap` to terminal in a single call. Used by tests; not
+//!   used by Lambda (which would hit the 15-minute invocation limit
+//!   on a slow swap).
 //!
 //! Construction takes trait objects for every collaborator, so tests
 //! plug in mocks and production wires up the real implementations.
@@ -27,13 +39,14 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use crate::audit::{AuditEntry, AuditLog};
-use crate::clients::{RgbClient, SpentStatus, WebcashClient};
+use crate::clients::{HtlcCloseKind, HtlcRefundParams, RgbClient, SpentStatus, WebcashClient};
 use crate::error::{RefereeError, Result};
 use crate::musig2::{Musig2Signer, Session};
 use crate::push::{PushKind, PushRequest, PushTransport};
 use crate::sign::Identity;
 use crate::state::{self, AlicePayload, BobPayload, Musig2Sessions, Parties, SwapId, SwapState};
-use crate::store::{PersistedSwap, SwapStore};
+use crate::store::SwapStore;
+use crate::transaction::Transaction;
 use crate::zkp::{Circuit, Verifier};
 
 /// All collaborators bundled. Inject via direct field construction.
@@ -54,6 +67,10 @@ pub struct Orchestrator {
     pub audit: Arc<dyn AuditLog>,
     /// Swap-state store.
     pub store: Arc<dyn SwapStore>,
+    /// Maximum lifetime of a swap from initiate to terminal. Used as
+    /// `created_at_unix + swap_max_age_secs` to set the timeout on
+    /// the HTLC backup record.
+    pub swap_max_age_secs: u64,
     /// Insert-push retry budget (per `docs/referee-zkp-based-swap.md` §4.4).
     pub insert_push_retry: u8,
     /// Backoff between insert-push retries. The orchestrator sleeps for
@@ -67,80 +84,33 @@ pub struct Orchestrator {
 }
 
 impl Orchestrator {
-    /// Generate a fresh swap id and spawn `run_swap` on the current
-    /// tokio runtime. Returns the id immediately so the HTTP handler can
-    /// respond before the orchestration finishes (which can take many
-    /// seconds — pre-check + insert push + post-check loop + abort path).
+    /// Initiate a swap synchronously. Persists `init`, verifies both
+    /// ZKPs, runs the webcash pre-check, dispatches the first
+    /// `insert` push, persists `insert-pushed`. Returns the swap id.
     ///
-    /// The spawned task logs (via `tracing`) on terminal state; clients
-    /// poll `/v1/swap/{id}/poll` for progress.
+    /// All state is in the configured store before this method
+    /// returns — there is no background task. A subsequent call to
+    /// [`advance_swap`] (typically driven by EventBridge / SQS in
+    /// Lambda deployments) runs one post-check iteration.
+    ///
+    /// This is the production HTTP path; the handler reads the body
+    /// once and calls this. Total wall-clock is one ZKP verify, one
+    /// pre-check round-trip, one push round-trip, and a few
+    /// store/audit writes — well under the Lambda 15-minute limit and
+    /// typically under one second with mocks.
     pub async fn start_swap(
-        self: Arc<Self>,
+        &self,
         parties: Parties,
         bob: BobPayload,
         alice: AlicePayload,
         alice_nonces: state::AliceMusig2Nonces,
     ) -> Result<SwapId> {
-        let id = SwapId::fresh();
-        // Persist a minimal "accepted" placeholder so `poll_status` finds
-        // the row even if the spawned task hasn't reached its first
-        // `persist` call yet. The placeholder uses the synthetic phase
-        // `accepted`; the spawned task overwrites with `init` immediately.
-        let placeholder = PersistedSwap {
-            id: id.clone(),
-            state: state::AnyPhaseSwapState {
-                phase: "accepted".into(),
-                inner: serde_json::json!({}),
-            },
-            updated_at_unix: self.now(),
-        };
-        self.store.upsert(&placeholder).await?;
-
-        let id_for_task = id.clone();
-        let me = self.clone();
-        tokio::spawn(async move {
-            match me
-                .run_swap(id_for_task.clone(), parties, bob, alice, alice_nonces)
-                .await
-            {
-                Ok(SwapOutcome::Settled { swap_id }) => {
-                    tracing::info!(swap_id = %swap_id.0, "swap settled");
-                }
-                Ok(SwapOutcome::Refunded { swap_id }) => {
-                    tracing::info!(swap_id = %swap_id.0, "swap refunded");
-                }
-                Err(e) => {
-                    tracing::error!(swap_id = %id_for_task.0, error = %e, "swap failed");
-                }
-            }
-        });
-        Ok(id)
-    }
-
-    /// Run the happy + failure paths end-to-end for one swap.
-    ///
-    /// The function is deliberately monolithic: keeping the entire
-    /// orchestration inline (as opposed to splitting into a dozen small
-    /// methods) makes the failure paths explicit, easy to read, and
-    /// easy to verify against the protocol doc. Each external call is
-    /// folded into a typestate transition immediately so the state
-    /// always reflects what we just did.
-    ///
-    /// `swap_id` is supplied by the caller — typically [`start_swap`]
-    /// generates it first so the HTTP response can include it before this
-    /// function does any work.
-    pub async fn run_swap(
-        &self,
-        swap_id: SwapId,
-        parties: Parties,
-        bob: BobPayload,
-        alice: AlicePayload,
-        alice_nonces: state::AliceMusig2Nonces,
-    ) -> Result<SwapOutcome> {
         let now_unix = self.now();
-        let id = swap_id;
+        let id = SwapId::fresh();
 
-        // 1) Begin two MuSig2 sessions (settle + refund).
+        // 1) Begin two MuSig2 sessions (settle + refund). Backends
+        //    persist secret nonces durably; in-memory mock keeps them
+        //    in process state and is replaced for Lambda deployments.
         let settle_pub_nonce = self.musig.begin_session(&id, Session::Settle).await?.0;
         let refund_pub_nonce = self.musig.begin_session(&id, Session::Refund).await?.0;
         let referee_sessions = Musig2Sessions {
@@ -149,9 +119,7 @@ impl Orchestrator {
             secret_nonce_handle: id.clone(),
         };
 
-        // 2) Audit "init" before the state value exists so the audit-tip
-        //    can be folded into the freshly-constructed state via
-        //    `state::initiate(...)`.
+        // 2) Audit `init`.
         let mut entry = AuditEntry {
             swap_id: id.clone(),
             phase: "init".into(),
@@ -180,9 +148,8 @@ impl Orchestrator {
         );
         self.persist(&initial, "init").await?;
 
-        // 3) Mint the swap-tracking RGB record (public commitment).
-        let _record_id = self
-            .rgb
+        // 3) Mint the swap-tracking RGB record.
+        self.rgb
             .mint_swap_record(
                 &id.0,
                 &serde_json::json!({
@@ -193,6 +160,34 @@ impl Orchestrator {
                 }),
             )
             .await?;
+        // 3b) Mint the timeout-bound HTLC backup record. Best-effort:
+        // backends without HTLC support return None and the swap
+        // proceeds via the MuSig2 refund path.
+        let htlc_contract = self
+            .rgb
+            .mint_htlc_refund(
+                &id.0,
+                &HtlcRefundParams {
+                    timeout_unix: now_unix.saturating_add(self.swap_max_age_secs),
+                    // No party-supplied refund secret in v0.4.0; the
+                    // record is referee-controlled and evidentiary
+                    // only. Future revisions can layer
+                    // `R_alice`-bound unilateral release.
+                    refund_unlock_hash_hex: String::new(),
+                    bob_pgp_fp: initial.parties.bob_pgp_fp.0.clone(),
+                    alice_pgp_fp: initial.parties.alice_pgp_fp.0.clone(),
+                },
+            )
+            .await
+            .unwrap_or(None);
+        if let Some(cid) = htlc_contract {
+            // Persist the contract id alongside the row so
+            // settle/refund/cancel can find it.
+            if let Some(mut row) = self.store.get(&id).await? {
+                row.htlc_refund_contract_id = Some(cid);
+                self.store.upsert(&row).await?;
+            }
+        }
 
         // 4) Verify both ZKPs.
         let ok_bob = self
@@ -228,180 +223,418 @@ impl Orchestrator {
         let pre_state = state::pre_check(zkps_state, unspent, self.now(), pre_tip)?;
         self.persist(&pre_state, "pre-checked").await?;
 
-        // 6) insert_push to Alice (with retries on still-unspent).
-        let mut push_state = {
-            self.push
-                .dispatch(&PushRequest {
-                    swap_id: id.clone(),
-                    recipient_pgp_fp: pre_state.parties.alice_pgp_fp.clone(),
-                    kind: PushKind::Insert,
-                    payload_b64: base64_of(&pre_state.bob.enc_secret_for_alice.bytes),
-                    callback_url: self.callback_url(&id),
-                })
-                .await?;
-            let push_tip = self
-                .audit_phase(
-                    &id,
-                    "insert-pushed",
-                    serde_json::json!({"attempt": 1}),
-                    &pre_state.audit_tip_hex,
-                )
-                .await?;
-            let s = state::insert_pushed_from_pre(pre_state, self.now(), push_tip);
-            self.persist(&s, "insert-pushed").await?;
-            s
-        };
+        // 6) Dispatch the first insert push.
+        self.push
+            .dispatch(&PushRequest {
+                swap_id: id.clone(),
+                recipient_pgp_fp: pre_state.parties.alice_pgp_fp.clone(),
+                kind: PushKind::Insert,
+                payload_b64: base64_of(&pre_state.bob.enc_secret_for_alice.bytes),
+                callback_url: self.callback_url(&id),
+            })
+            .await?;
+        let push_tip = self
+            .audit_phase(
+                &id,
+                "insert-pushed",
+                serde_json::json!({"attempt": 1}),
+                &pre_state.audit_tip_hex,
+            )
+            .await?;
+        let pushed = state::insert_pushed_from_pre(pre_state, self.now(), push_tip);
+        self.persist(&pushed, "insert-pushed").await?;
+        Ok(id)
+    }
 
+    /// Run `start_swap` then loop `advance_swap` until terminal.
+    /// Synchronous; tests use this for the full e2e. Production
+    /// Lambda deployments do NOT call this — they call `start_swap`
+    /// on the request and `advance_swap` on a schedule, so each
+    /// invocation is short-lived.
+    pub async fn run_to_completion(
+        &self,
+        parties: Parties,
+        bob: BobPayload,
+        alice: AlicePayload,
+        alice_nonces: state::AliceMusig2Nonces,
+    ) -> Result<SwapOutcome> {
+        let id = self.start_swap(parties, bob, alice, alice_nonces).await?;
         loop {
-            // Backoff before each post-check (skipped on first iteration
-            // when `retry_backoff` is `ZERO`, which is the test config).
-            // A non-zero backoff prevents a hot loop hammering webcash.org.
             if !self.retry_backoff.is_zero() {
                 tokio::time::sleep(self.retry_backoff).await;
             }
-
-            // Post-check.
-            let post = self.webcash.check(&push_state.bob.h_b).await?;
-            if post == SpentStatus::Spent {
-                let outcome = state::PostCheckOutcome::Settled;
-                let settled_tip = self
-                    .audit_phase(
-                        &id,
-                        "settled",
-                        serde_json::json!({}),
-                        &push_state.audit_tip_hex,
-                    )
-                    .await?;
-                let settled = state::settle(push_state, outcome, self.now(), settled_tip)?;
-
-                // Release-settle push to Bob: referee's settle partial-sig + Alice's enc-to-Bob blob.
-                let referee_partial = self
-                    .musig
-                    .partial_sign(
-                        &id,
-                        Session::Settle,
-                        settled.alice.tx_settle_hash.as_bytes(),
-                        &settled.parties.alice_musig2_pubkey,
-                        &crate::musig2::PubNonce(settled.alice_nonces.settle_nonce_pub.clone()),
-                    )
-                    .await?;
-                self.push
-                    .dispatch(&PushRequest {
-                        swap_id: id.clone(),
-                        recipient_pgp_fp: settled.parties.bob_pgp_fp.clone(),
-                        kind: PushKind::ReleaseSettle,
-                        payload_b64: base64_of(
-                            &serde_json::to_vec(&serde_json::json!({
-                                "referee_partial_sig": referee_partial.0,
-                                "alice_enc_partial_sig": base64_of(&settled.alice.enc_partial_sig_for_bob.bytes),
-                            }))
-                            .map_err(RefereeError::from)?,
-                        ),
-                        callback_url: self.callback_url(&id),
-                    })
-                    .await?;
-                self.persist(&settled, "settled").await?;
-                self.musig.discard_session(&id, Session::Refund).await?;
-                return Ok(SwapOutcome::Settled { swap_id: id });
+            if let Some(outcome) = self.advance_swap(&id).await? {
+                return Ok(outcome);
             }
+        }
+    }
 
-            // Still unspent — decide retry vs abort.
-            if push_state.insert_push_attempts < self.insert_push_retry {
-                self.push
-                    .dispatch(&PushRequest {
-                        swap_id: id.clone(),
-                        recipient_pgp_fp: push_state.parties.alice_pgp_fp.clone(),
-                        kind: PushKind::Insert,
-                        payload_b64: base64_of(&push_state.bob.enc_secret_for_alice.bytes),
-                        callback_url: self.callback_url(&id),
-                    })
-                    .await?;
-                let new_attempt = (push_state.insert_push_attempts as u32) + 1;
-                let retry_tip = self
-                    .audit_phase(
-                        &id,
-                        "insert-pushed",
-                        serde_json::json!({"attempt": new_attempt}),
-                        &push_state.audit_tip_hex,
-                    )
-                    .await?;
-                push_state = state::insert_pushed_retry(push_state, self.now(), retry_tip)?;
-                self.persist(&push_state, "insert-pushed").await?;
-                continue;
+    /// Cancel a swap on the request of one of the parties. Verifies
+    /// the party's Ed25519 cancel signature, checks the phase
+    /// eligibility, and writes a terminal `canceled` row + audit
+    /// entry.
+    ///
+    /// Permission policy (see `docs/transaction-model.md`):
+    /// - `init` / `zkps-verified` / `pre-checked`: either party may
+    ///   unilaterally cancel.
+    /// - `insert-pushed`: only Bob may unilaterally cancel (he
+    ///   withdraws the offer); Alice has to wait for the post-check
+    ///   loop to exhaust → refund.
+    /// - any other phase: no cancel — let the abort/refund path run
+    ///   or wait for terminal.
+    pub async fn cancel_swap(
+        &self,
+        id: &SwapId,
+        by_pgp_fp: &state::PgpFingerprint,
+        reason: &str,
+        sig_hex: &str,
+    ) -> Result<()> {
+        let tx = self
+            .store
+            .get(id)
+            .await?
+            .ok_or_else(|| RefereeError::BadRequest(format!("unknown swap_id: {}", id.0)))?;
+        if tx.terminal {
+            return Err(RefereeError::InvalidTransition(format!(
+                "cannot cancel: swap is already in terminal phase {}",
+                tx.phase
+            )));
+        }
+
+        // Match the requester to a party and pick the right cancel pubkey.
+        let parties: Parties = serde_json::from_value(
+            tx.state_blob
+                .inner
+                .get("parties")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        )
+        .map_err(|e| RefereeError::Store(format!("decode parties: {e}")))?;
+        let (cancel_pubkey, is_bob) = if *by_pgp_fp == parties.bob_pgp_fp {
+            (parties.bob_cancel_pubkey_hex.clone(), true)
+        } else if *by_pgp_fp == parties.alice_pgp_fp {
+            (parties.alice_cancel_pubkey_hex.clone(), false)
+        } else {
+            return Err(RefereeError::BadRequest(
+                "by_pgp_fp does not match either party of this swap".into(),
+            ));
+        };
+
+        // Phase eligibility per policy.
+        match tx.phase.as_str() {
+            "init" | "zkps-verified" | "pre-checked" => {} // unilateral OK
+            "insert-pushed" => {
+                if !is_bob {
+                    return Err(RefereeError::InvalidTransition(
+                        "alice cannot unilaterally cancel after insert-pushed; \
+                         the swap will refund automatically once retries exhaust"
+                            .into(),
+                    ));
+                }
             }
+            _ => {
+                return Err(RefereeError::InvalidTransition(format!(
+                    "cannot cancel from phase {}",
+                    tx.phase
+                )));
+            }
+        }
 
-            // Retries exhausted: abort path.
-            let abort_tip = self
+        // Verify the signature.
+        let body = Identity::party_cancel_message(&id.0, &by_pgp_fp.0, reason);
+        Identity::verify_party_signature(&cancel_pubkey, &body, sig_hex)?;
+
+        // Audit entry first (then the row, so the chain is visible).
+        let now = self.now();
+        let canceled_tip = self
+            .audit_phase(
+                id,
+                "canceled",
+                serde_json::json!({
+                    "by": by_pgp_fp.0,
+                    "reason_sha256": hex::encode(<sha2::Sha256 as sha2::Digest>::digest(reason.as_bytes())),
+                }),
+                tx.state_blob
+                    .inner
+                    .get("audit_tip_hex")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            )
+            .await?;
+
+        // Construct the canceled row by mutating the existing tx
+        // shape — we don't run a typestate transition because the
+        // typestate doesn't carry party-cancel data, and the
+        // user-facing fields are what matter for cancel.
+        let mut canceled = tx;
+        canceled.phase = "canceled".into();
+        canceled.status = crate::transaction::TransactionStatus::Canceled;
+        canceled.terminal = true;
+        canceled.cancel_reason = Some(reason.to_string());
+        canceled.canceled_by_pgp_fp = Some(by_pgp_fp.clone());
+        canceled.updated_at_unix = now;
+        canceled.state_blob.phase = "canceled".into();
+        if let Some(obj) = canceled.state_blob.inner.as_object_mut() {
+            obj.insert(
+                "audit_tip_hex".into(),
+                serde_json::Value::String(canceled_tip.clone()),
+            );
+            obj.insert(
+                "phase_entered_at".into(),
+                serde_json::Value::Number(serde_json::Number::from(now)),
+            );
+        }
+        self.store.upsert(&canceled).await?;
+
+        // Best-effort invalidate push to whichever party may have
+        // received an in-flight payload. Pre-`insert-pushed` no-op.
+        if matches!(canceled.phase.as_str(), "canceled") && canceled.insert_push_attempts > 0 {
+            let _ = self
+                .push
+                .dispatch(&PushRequest {
+                    swap_id: id.clone(),
+                    recipient_pgp_fp: parties.alice_pgp_fp.clone(),
+                    kind: PushKind::Invalidate,
+                    payload_b64: base64_of(canceled.webcash_public_hash.0.as_bytes()),
+                    callback_url: self.callback_url(id),
+                })
+                .await;
+        }
+
+        // Discard musig sessions — both, since we are not signing
+        // anything for this swap any more.
+        let _ = self.musig.discard_session(id, Session::Settle).await;
+        let _ = self.musig.discard_session(id, Session::Refund).await;
+        self.close_htlc_if_any(id, HtlcCloseKind::Cancel).await;
+
+        Ok(())
+    }
+
+    /// Run ONE state-machine transition on the swap identified by
+    /// `id`, using only persisted state.
+    ///
+    /// Returns:
+    /// - `Ok(Some(outcome))` if this call moved the swap to a
+    ///   terminal phase (`Settled` / `Refunded`).
+    /// - `Ok(None)` if the swap progressed but is still in flight
+    ///   (more `advance_swap` calls needed).
+    /// - `Err(...)` for transient infrastructure failure; safe to
+    ///   retry — every transition is committed atomically with its
+    ///   audit entry, so a partial failure leaves the persisted
+    ///   phase consistent and the next `advance_swap` call resumes
+    ///   from where the previous one stopped.
+    ///
+    /// Idempotent: if `id` is already in a terminal phase, returns
+    /// the matching `Some(outcome)` without doing additional work.
+    /// If `id` is in `init`, `zkps-verified`, or `pre-checked` (a
+    /// freshly-initiated swap that hasn't yet reached
+    /// `insert-pushed`), this call is a no-op — `start_swap` is
+    /// responsible for the synchronous run through `insert-pushed`.
+    pub async fn advance_swap(&self, id: &SwapId) -> Result<Option<SwapOutcome>> {
+        let tx = self
+            .store
+            .get(id)
+            .await?
+            .ok_or_else(|| RefereeError::BadRequest(format!("unknown swap_id: {}", id.0)))?;
+        match tx.phase.as_str() {
+            "settled" => Ok(Some(SwapOutcome::Settled {
+                swap_id: id.clone(),
+            })),
+            "refunded" => Ok(Some(SwapOutcome::Refunded {
+                swap_id: id.clone(),
+            })),
+            "canceled" => Ok(Some(SwapOutcome::Canceled {
+                swap_id: id.clone(),
+            })),
+            "insert-pushed" => {
+                self.advance_from_insert_pushed(id, &tx.state_blob.inner)
+                    .await
+            }
+            "aborted" => self.advance_from_aborted(id, &tx.state_blob.inner).await,
+            "invalidated" => {
+                self.advance_from_invalidated(id, &tx.state_blob.inner)
+                    .await
+            }
+            // Earlier phases are owned by `start_swap`; advancing them
+            // is a no-op so EventBridge polling on a fresh swap before
+            // start_swap finishes is safe.
+            _ => Ok(None),
+        }
+    }
+
+    async fn advance_from_insert_pushed(
+        &self,
+        id: &SwapId,
+        inner: &serde_json::Value,
+    ) -> Result<Option<SwapOutcome>> {
+        let push_state: SwapState<state::InsertPushed> = serde_json::from_value(inner.clone())
+            .map_err(|e| RefereeError::Store(format!("decode insert-pushed: {e}")))?;
+
+        let post = self.webcash.check(&push_state.bob.h_b).await?;
+        if post == SpentStatus::Spent {
+            let settled_tip = self
                 .audit_phase(
-                    &id,
-                    "aborted",
-                    serde_json::json!({"attempts": push_state.insert_push_attempts}),
+                    id,
+                    "settled",
+                    serde_json::json!({}),
                     &push_state.audit_tip_hex,
                 )
                 .await?;
-            let aborted = state::abort(push_state, true, self.now(), abort_tip)?;
-            self.persist(&aborted, "aborted").await?;
-
-            // Ask Bob to invalidate his secret.
-            self.push
-                .dispatch(&PushRequest {
-                    swap_id: id.clone(),
-                    recipient_pgp_fp: aborted.parties.bob_pgp_fp.clone(),
-                    kind: PushKind::Invalidate,
-                    payload_b64: base64_of(aborted.bob.h_b.0.as_bytes()),
-                    callback_url: self.callback_url(&id),
-                })
-                .await?;
-            // In the integration-test harness Bob's wallet acks via
-            // `/v1/swap/{id}/ack` which calls `mark_invalidate_acked`; in
-            // tests we drive that directly by polling. For the
-            // single-shot orchestrator path we treat the dispatch ack as
-            // sufficient — production wires real ack-callbacks.
-            let inv_tip = self
-                .audit_phase(
-                    &id,
-                    "invalidated",
-                    serde_json::json!({"acked": true}),
-                    &aborted.audit_tip_hex,
-                )
-                .await?;
-            let invalidated = state::invalidated(aborted, true, self.now(), inv_tip)?;
-            self.persist(&invalidated, "invalidated").await?;
-
-            // Send refund partial-sig to Alice.
-            let refund_partial = self
+            let settled = state::settle(
+                push_state,
+                state::PostCheckOutcome::Settled,
+                self.now(),
+                settled_tip,
+            )?;
+            let referee_partial = self
                 .musig
                 .partial_sign(
-                    &id,
-                    Session::Refund,
-                    invalidated.alice.tx_refund_hash.as_bytes(),
-                    &invalidated.parties.alice_musig2_pubkey,
-                    &crate::musig2::PubNonce(invalidated.alice_nonces.refund_nonce_pub.clone()),
+                    id,
+                    Session::Settle,
+                    settled.alice.tx_settle_hash.as_bytes(),
+                    &settled.parties.alice_musig2_pubkey,
+                    &crate::musig2::PubNonce(settled.alice_nonces.settle_nonce_pub.clone()),
                 )
                 .await?;
             self.push
                 .dispatch(&PushRequest {
                     swap_id: id.clone(),
-                    recipient_pgp_fp: invalidated.parties.alice_pgp_fp.clone(),
-                    kind: PushKind::ReleaseRefund,
-                    payload_b64: base64_of(refund_partial.0.as_bytes()),
-                    callback_url: self.callback_url(&id),
+                    recipient_pgp_fp: settled.parties.bob_pgp_fp.clone(),
+                    kind: PushKind::ReleaseSettle,
+                    payload_b64: base64_of(
+                        &serde_json::to_vec(&serde_json::json!({
+                            "referee_partial_sig": referee_partial.0,
+                            "alice_enc_partial_sig": base64_of(&settled.alice.enc_partial_sig_for_bob.bytes),
+                        }))
+                        .map_err(RefereeError::from)?,
+                    ),
+                    callback_url: self.callback_url(id),
                 })
                 .await?;
+            self.persist(&settled, "settled").await?;
+            self.musig.discard_session(id, Session::Refund).await?;
+            self.close_htlc_if_any(id, HtlcCloseKind::Settle).await;
+            return Ok(Some(SwapOutcome::Settled {
+                swap_id: id.clone(),
+            }));
+        }
 
-            let refunded_tip = self
+        // Still unspent — retry vs abort.
+        if push_state.insert_push_attempts < self.insert_push_retry {
+            self.push
+                .dispatch(&PushRequest {
+                    swap_id: id.clone(),
+                    recipient_pgp_fp: push_state.parties.alice_pgp_fp.clone(),
+                    kind: PushKind::Insert,
+                    payload_b64: base64_of(&push_state.bob.enc_secret_for_alice.bytes),
+                    callback_url: self.callback_url(id),
+                })
+                .await?;
+            let new_attempt = (push_state.insert_push_attempts as u32) + 1;
+            let retry_tip = self
                 .audit_phase(
-                    &id,
-                    "refunded",
-                    serde_json::json!({}),
-                    &invalidated.audit_tip_hex,
+                    id,
+                    "insert-pushed",
+                    serde_json::json!({"attempt": new_attempt}),
+                    &push_state.audit_tip_hex,
                 )
                 .await?;
-            let refunded = state::refunded(invalidated, self.now(), refunded_tip);
-            self.persist(&refunded, "refunded").await?;
-            self.musig.discard_session(&id, Session::Settle).await?;
-            return Ok(SwapOutcome::Refunded { swap_id: id });
+            let retried = state::insert_pushed_retry(push_state, self.now(), retry_tip)?;
+            self.persist(&retried, "insert-pushed").await?;
+            return Ok(None);
         }
+
+        // Retries exhausted: enter abort.
+        let abort_tip = self
+            .audit_phase(
+                id,
+                "aborted",
+                serde_json::json!({"attempts": push_state.insert_push_attempts}),
+                &push_state.audit_tip_hex,
+            )
+            .await?;
+        let aborted = state::abort(push_state, true, self.now(), abort_tip)?;
+        self.persist(&aborted, "aborted").await?;
+        // Dispatch the invalidate push to Bob. Idempotent: if a future
+        // `advance_swap` resumes from `aborted` it will dispatch
+        // again, which the push provider deduplicates by (swap_id,
+        // kind).
+        self.push
+            .dispatch(&PushRequest {
+                swap_id: id.clone(),
+                recipient_pgp_fp: aborted.parties.bob_pgp_fp.clone(),
+                kind: PushKind::Invalidate,
+                payload_b64: base64_of(aborted.bob.h_b.0.as_bytes()),
+                callback_url: self.callback_url(id),
+            })
+            .await?;
+        Ok(None)
+    }
+
+    async fn advance_from_aborted(
+        &self,
+        id: &SwapId,
+        inner: &serde_json::Value,
+    ) -> Result<Option<SwapOutcome>> {
+        let aborted: SwapState<state::Aborted> = serde_json::from_value(inner.clone())
+            .map_err(|e| RefereeError::Store(format!("decode aborted: {e}")))?;
+        // For now we treat the dispatch ack as sufficient — production
+        // wires real recipient-ack callbacks via `/v1/swap/{id}/ack`,
+        // which transition `aborted -> invalidated`.
+        let inv_tip = self
+            .audit_phase(
+                id,
+                "invalidated",
+                serde_json::json!({"acked": true}),
+                &aborted.audit_tip_hex,
+            )
+            .await?;
+        let invalidated = state::invalidated(aborted, true, self.now(), inv_tip)?;
+        self.persist(&invalidated, "invalidated").await?;
+        Ok(None)
+    }
+
+    async fn advance_from_invalidated(
+        &self,
+        id: &SwapId,
+        inner: &serde_json::Value,
+    ) -> Result<Option<SwapOutcome>> {
+        let invalidated: SwapState<state::Invalidated> = serde_json::from_value(inner.clone())
+            .map_err(|e| RefereeError::Store(format!("decode invalidated: {e}")))?;
+        let refund_partial = self
+            .musig
+            .partial_sign(
+                id,
+                Session::Refund,
+                invalidated.alice.tx_refund_hash.as_bytes(),
+                &invalidated.parties.alice_musig2_pubkey,
+                &crate::musig2::PubNonce(invalidated.alice_nonces.refund_nonce_pub.clone()),
+            )
+            .await?;
+        self.push
+            .dispatch(&PushRequest {
+                swap_id: id.clone(),
+                recipient_pgp_fp: invalidated.parties.alice_pgp_fp.clone(),
+                kind: PushKind::ReleaseRefund,
+                payload_b64: base64_of(refund_partial.0.as_bytes()),
+                callback_url: self.callback_url(id),
+            })
+            .await?;
+        let refunded_tip = self
+            .audit_phase(
+                id,
+                "refunded",
+                serde_json::json!({}),
+                &invalidated.audit_tip_hex,
+            )
+            .await?;
+        let refunded = state::refunded(invalidated, self.now(), refunded_tip);
+        self.persist(&refunded, "refunded").await?;
+        self.musig.discard_session(id, Session::Settle).await?;
+        self.close_htlc_if_any(id, HtlcCloseKind::Refund).await;
+        Ok(Some(SwapOutcome::Refunded {
+            swap_id: id.clone(),
+        }))
     }
 
     fn now(&self) -> u64 {
@@ -409,6 +642,21 @@ impl Orchestrator {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0)
+    }
+
+    /// Close the HTLC backup record if one was minted at initiate.
+    /// Best-effort: any RGB error is logged and dropped, so a
+    /// flaky RGB server never blocks settlement / refund.
+    async fn close_htlc_if_any(&self, id: &SwapId, kind: HtlcCloseKind) {
+        let Ok(Some(row)) = self.store.get(id).await else {
+            return;
+        };
+        let Some(cid) = row.htlc_refund_contract_id.as_deref() else {
+            return;
+        };
+        if let Err(e) = self.rgb.close_htlc_refund(&id.0, cid, kind).await {
+            tracing::warn!(swap_id = %id.0, err = %e, "close_htlc_refund best-effort failed");
+        }
     }
 
     fn callback_url(&self, id: &SwapId) -> String {
@@ -434,16 +682,24 @@ impl Orchestrator {
     }
 
     async fn persist<P: state::Phase>(&self, s: &SwapState<P>, phase: &str) -> Result<()> {
-        let inner = serde_json::to_value(s).map_err(RefereeError::from)?;
-        let row = PersistedSwap {
-            id: s.id.clone(),
-            state: state::AnyPhaseSwapState {
-                phase: phase.into(),
-                inner,
-            },
-            updated_at_unix: self.now(),
-        };
-        self.store.upsert(&row).await
+        // Project the typestate into the user-facing Transaction shape.
+        // First-write `created_at_unix` is taken from `s.phase_entered_at`
+        // when phase is "init"; otherwise we preserve whatever the
+        // existing row held (so created_at_unix is monotonic across
+        // upserts).
+        let now = self.now();
+        let mut tx = Transaction::derive_from(s, phase, now, None, None, None);
+        if phase == "init" {
+            tx.created_at_unix = s.phase_entered_at;
+        } else if let Some(existing) = self.store.get(&s.id).await? {
+            tx.created_at_unix = existing.created_at_unix;
+            // Preserve cancel + HTLC fields set by earlier writes; the
+            // typestate doesn't carry them.
+            tx.cancel_reason = existing.cancel_reason;
+            tx.canceled_by_pgp_fp = existing.canceled_by_pgp_fp;
+            tx.htlc_refund_contract_id = existing.htlc_refund_contract_id;
+        }
+        self.store.upsert(&tx).await
     }
 }
 
@@ -458,6 +714,12 @@ pub enum SwapOutcome {
     /// Refund path completed: Alice received her refund partial-sig.
     Refunded {
         /// The completed swap's id.
+        swap_id: SwapId,
+    },
+    /// Canceled by a party via `POST /v1/swap/{id}/cancel` (or by the
+    /// referee at swap_max_age timeout — future work).
+    Canceled {
+        /// The canceled swap's id.
         swap_id: SwapId,
     },
 }

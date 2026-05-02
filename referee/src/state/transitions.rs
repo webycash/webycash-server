@@ -211,6 +211,8 @@ mod tests {
             alice_pgp_fp: PgpFingerprint("cc".repeat(20)),
             alice_pgp_pubkey_hex: "dd".repeat(64),
             alice_musig2_pubkey: Secp256k1Pubkey("02".to_string() + &"ee".repeat(32)),
+            bob_cancel_pubkey_hex: "11".repeat(32),
+            alice_cancel_pubkey_hex: "22".repeat(32),
         }
     }
 

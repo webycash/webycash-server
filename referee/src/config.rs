@@ -40,10 +40,21 @@ pub struct Config {
     /// header). Path to file with hex-encoded 32-byte key.
     pub push_webhook_hmac_key_path: PathBuf,
 
-    /// Optional Postgres URL. When `None`, the referee uses the in-memory
-    /// store (suitable for dev only — state is lost on restart).
-    #[serde(default)]
-    pub postgres_url: Option<String>,
+    /// Storage backend selection. One of `redis`, `dynamodb`, `fdb`,
+    /// or `inmem` (default — dev only). Mirrors the asset-server
+    /// `WEBCASH_DB_BACKEND` convention.
+    pub db_backend: String,
+
+    /// Redis connection URL (used when `db_backend = "redis"`).
+    pub redis_url: Option<String>,
+
+    /// Optional DynamoDB endpoint override (used when
+    /// `db_backend = "dynamodb"`). Leave unset for AWS-hosted
+    /// DynamoDB; set for DynamoDB Local.
+    pub dynamodb_endpoint: Option<String>,
+
+    /// FoundationDB cluster file path (used when `db_backend = "fdb"`).
+    pub fdb_cluster_file: Option<String>,
 
     /// Maximum lifetime of a swap from `initiate` to terminal state. Past
     /// this, the referee aborts and triggers refund. Recommended: 24 h.
@@ -79,8 +90,10 @@ impl Config {
     /// `REFEREE_RGB_SERVER_URL`, `REFEREE_WEBCASH_SERVER_URL`,
     /// `REFEREE_PUSH_WEBHOOK_URL`, `REFEREE_PUSH_WEBHOOK_HMAC_KEY_PATH`.
     ///
-    /// Optional: `REFEREE_POSTGRES_URL`, `REFEREE_SWAP_MAX_AGE_SECS`,
-    /// `REFEREE_INSERT_PUSH_RETRY`, `REFEREE_RETRY_BACKOFF_MS`.
+    /// Optional: `WEBCASH_DB_BACKEND` (default `inmem`),
+    /// `REDIS_URL`, `DYNAMODB_ENDPOINT`, `FDB_CLUSTER_FILE`,
+    /// `REFEREE_SWAP_MAX_AGE_SECS`, `REFEREE_INSERT_PUSH_RETRY`,
+    /// `REFEREE_RETRY_BACKOFF_MS`.
     pub fn from_env() -> Result<Self> {
         let bind = require_env("REFEREE_BIND")?
             .parse()
@@ -91,7 +104,11 @@ impl Config {
         let push_webhook_url = require_env("REFEREE_PUSH_WEBHOOK_URL")?;
         let push_webhook_hmac_key_path =
             PathBuf::from(require_env("REFEREE_PUSH_WEBHOOK_HMAC_KEY_PATH")?);
-        let postgres_url = std::env::var("REFEREE_POSTGRES_URL").ok();
+        let db_backend =
+            std::env::var("WEBCASH_DB_BACKEND").unwrap_or_else(|_| "inmem".to_string());
+        let redis_url = std::env::var("REDIS_URL").ok();
+        let dynamodb_endpoint = std::env::var("DYNAMODB_ENDPOINT").ok();
+        let fdb_cluster_file = std::env::var("FDB_CLUSTER_FILE").ok();
         let swap_max_age_secs = std::env::var("REFEREE_SWAP_MAX_AGE_SECS")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -111,7 +128,10 @@ impl Config {
             webcash_server_url,
             push_webhook_url,
             push_webhook_hmac_key_path,
-            postgres_url,
+            db_backend,
+            redis_url,
+            dynamodb_endpoint,
+            fdb_cluster_file,
             swap_max_age_secs,
             insert_push_retry,
             retry_backoff_ms,

@@ -183,19 +183,146 @@ impl Musig2Signer for MockSigner {
 
 #[cfg(feature = "musig2-real")]
 mod real_signer {
-    //! Real MuSig2 signer using the `musig2` crate over secp256k1.
+    //! Real MuSig2 signer using the `musig2` crate over secp256k1
+    //! (BIP327).
     //!
-    //! Stubbed at this milestone — the implementation is small (the
-    //! `musig2` crate provides FirstRound + SecondRound types directly)
-    //! but lands together with the extro-node integration since both
-    //! sides of the protocol must agree on encoding details.
+    //! The referee's secp256k1 secret key is loaded from a 32-byte
+    //! file at boot. Per-session secret nonces are generated with a
+    //! CSPRNG and held in process memory keyed by
+    //! `(swap_id, session)` — they are never written to the store
+    //! (a stateless Lambda restart aborts in-flight swaps and the
+    //! refund path engages, per `docs/musig2-ceremony.md`).
+    //!
+    //! Wire-format: nonces are 66-byte serialized `PubNonce`s, hex;
+    //! partial signatures are 32-byte scalars, hex. Tests round-trip
+    //! through the same hex encoding the wallet implementor uses.
     use super::*;
+    use ::musig2::{KeyAggContext, PartialSignature, PubNonce as MusigPubNonce, SecNonce};
+    use rand::RngCore;
+    use secp256k1::{PublicKey, Secp256k1, SecretKey};
+    use std::collections::HashMap;
+    use std::path::Path;
+
+    struct LiveSession {
+        sec_nonce: SecNonce,
+        pub_nonce: MusigPubNonce,
+    }
 
     /// Production MuSig2 signer.
     pub struct RealSigner {
-        // Will hold: SecretKey, FirstRound state per session, etc.
+        sk: SecretKey,
+        pk: PublicKey,
+        sessions: tokio::sync::Mutex<HashMap<(String, Session), LiveSession>>,
+    }
+
+    impl RealSigner {
+        /// Load from a file containing the 32-byte raw secret,
+        /// hex-encoded. The file must be 0600.
+        pub fn load_from_file(path: impl AsRef<Path>) -> Result<Self> {
+            let raw = std::fs::read_to_string(path.as_ref())
+                .map_err(|e| RefereeError::Crypto(format!("musig2 secret file: {e}")))?;
+            let bytes = hex::decode(raw.trim())
+                .map_err(|e| RefereeError::Crypto(format!("musig2 secret hex: {e}")))?;
+            let arr: [u8; 32] = bytes
+                .try_into()
+                .map_err(|_| RefereeError::Crypto("musig2 secret must be 32 bytes".into()))?;
+            let sk = SecretKey::from_slice(&arr)
+                .map_err(|e| RefereeError::Crypto(format!("musig2 secret: {e}")))?;
+            let secp = Secp256k1::new();
+            let pk = sk.public_key(&secp);
+            Ok(Self {
+                sk,
+                pk,
+                sessions: Default::default(),
+            })
+        }
+    }
+
+    fn parse_alice_pubkey(s: &Secp256k1Pubkey) -> Result<PublicKey> {
+        let bytes = hex::decode(&s.0)
+            .map_err(|e| RefereeError::Musig2(format!("alice pubkey hex: {e}")))?;
+        PublicKey::from_slice(&bytes)
+            .map_err(|e| RefereeError::Musig2(format!("alice pubkey: {e}")))
+    }
+
+    fn parse_alice_pub_nonce(n: &PubNonce) -> Result<MusigPubNonce> {
+        let bytes =
+            hex::decode(&n.0).map_err(|e| RefereeError::Musig2(format!("alice nonce hex: {e}")))?;
+        MusigPubNonce::from_bytes(&bytes)
+            .map_err(|e| RefereeError::Musig2(format!("alice nonce: {e}")))
+    }
+
+    #[async_trait]
+    impl Musig2Signer for RealSigner {
+        fn pubshare(&self) -> Secp256k1Pubkey {
+            Secp256k1Pubkey(hex::encode(self.pk.serialize()))
+        }
+
+        async fn begin_session(&self, swap_id: &SwapId, session: Session) -> Result<PubNonce> {
+            let key = (swap_id.0.clone(), session);
+            let mut sessions = self.sessions.lock().await;
+            if sessions.contains_key(&key) {
+                return Err(RefereeError::Musig2(format!(
+                    "session already begun: {} / {:?}",
+                    swap_id.0, session
+                )));
+            }
+            // Fresh secret nonce per session — never reused.
+            let mut seed = [0u8; 32];
+            rand::thread_rng().fill_bytes(&mut seed);
+            let sec_nonce = SecNonce::build(seed).with_pubkey(self.pk).build();
+            let pub_nonce = sec_nonce.public_nonce();
+            let pub_hex = hex::encode(pub_nonce.serialize());
+            sessions.insert(
+                key,
+                LiveSession {
+                    sec_nonce,
+                    pub_nonce,
+                },
+            );
+            Ok(PubNonce(pub_hex))
+        }
+
+        async fn partial_sign(
+            &self,
+            swap_id: &SwapId,
+            session: Session,
+            tx_hash: &[u8],
+            alice_pubshare: &Secp256k1Pubkey,
+            alice_pub_nonce: &PubNonce,
+        ) -> Result<PartialSig> {
+            let key = (swap_id.0.clone(), session);
+            let live = self.sessions.lock().await.remove(&key).ok_or_else(|| {
+                RefereeError::Musig2(format!("no live session: {} / {:?}", swap_id.0, session))
+            })?;
+            let alice_pk = parse_alice_pubkey(alice_pubshare)?;
+            let alice_nonce = parse_alice_pub_nonce(alice_pub_nonce)?;
+            let key_agg = KeyAggContext::new([self.pk, alice_pk])
+                .map_err(|e| RefereeError::Musig2(format!("keyagg: {e}")))?;
+            let aggregated_nonce = ::musig2::AggNonce::sum([live.pub_nonce.clone(), alice_nonce]);
+            let partial: PartialSignature = ::musig2::sign_partial(
+                &key_agg,
+                self.sk,
+                live.sec_nonce,
+                &aggregated_nonce,
+                tx_hash,
+            )
+            .map_err(|e| RefereeError::Musig2(format!("partial sign: {e}")))?;
+            Ok(PartialSig(hex::encode(partial.serialize())))
+        }
+
+        async fn discard_session(&self, swap_id: &SwapId, session: Session) -> Result<()> {
+            self.sessions
+                .lock()
+                .await
+                .remove(&(swap_id.0.clone(), session));
+            Ok(())
+        }
     }
 }
+
+#[cfg(feature = "musig2-real")]
+pub use real_signer::RealSigner;
 
 #[cfg(test)]
 mod tests {

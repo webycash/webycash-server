@@ -32,9 +32,10 @@
 //! | [`zkp`] | Groth16 verifier interface (Bob's payload + Alice's signature circuits). |
 //! | [`musig2`] | MuSig2 nonce/partial-sig handling for the referee's own key share. |
 //! | [`push`] | External push-webhook caller. |
-//! | [`store`] | Persistent swap-state store (in-memory default; Postgres opt-in). |
+//! | [`store`] | Persistent swap-state store (in-memory default; Redis / DynamoDB / FoundationDB opt-in). |
 //! | [`audit`] | Append-only signed audit log. |
 //! | [`clients`] | Asset-rail HTTP clients (Webcash, RGB). |
+//! | [`transaction`] | Top-level transaction model + projection. |
 //! | [`api`] | Axum HTTP API surface. |
 //!
 //! ## Wallet implementor side is out of scope here
@@ -74,6 +75,7 @@ pub mod push;
 pub mod sign;
 pub mod state;
 pub mod store;
+pub mod transaction;
 pub mod zkp;
 
 /// Build identifier returned from the future `/v1/version` endpoint.

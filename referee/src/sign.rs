@@ -48,6 +48,8 @@ pub enum Tag {
     Invalidated,
     /// Final (abort path): refund-sig sent to Alice.
     Refunded,
+    /// Final (party cancel path): swap canceled by a party.
+    Canceled,
     /// Periodic audit-log tip signature.
     AuditTip,
 }
@@ -65,6 +67,7 @@ impl Tag {
             Tag::Aborted => "aborted",
             Tag::Invalidated => "invalidated",
             Tag::Refunded => "refunded",
+            Tag::Canceled => "canceled",
             Tag::AuditTip => "audit-tip",
         }
     }
@@ -125,6 +128,40 @@ impl Identity {
         let canonical = format!("referee:v1:{}:{}", tag.as_str(), hex::encode(hash));
         let sig: Signature = self.sk.sign(canonical.as_bytes());
         hex::encode(sig.to_bytes())
+    }
+
+    /// Canonical message a party signs to authorise a swap cancel.
+    /// Signed by the party's `cancel_pubkey_hex` (Ed25519) registered
+    /// at initiate. The reason is hashed so a long free-text reason
+    /// doesn't blow up the signed payload.
+    pub fn party_cancel_message(swap_id: &str, by_pgp_fp: &str, reason: &str) -> Vec<u8> {
+        let reason_hash = hex::encode(Sha256::digest(reason.as_bytes()));
+        format!("webycash-referee/cancel-swap-v1:{swap_id}:{by_pgp_fp}:{reason_hash}").into_bytes()
+    }
+
+    /// Verify a party's cancel signature. The pubkey is the party's
+    /// `cancel_pubkey_hex` registered at initiate. The body is the
+    /// output of [`Self::party_cancel_message`].
+    pub fn verify_party_signature(
+        cancel_pubkey_hex: &str,
+        body: &[u8],
+        sig_hex: &str,
+    ) -> Result<()> {
+        let pk_bytes = hex::decode(cancel_pubkey_hex)
+            .map_err(|e| RefereeError::Crypto(format!("cancel_pubkey hex: {e}")))?;
+        let pk_arr: [u8; 32] = pk_bytes
+            .try_into()
+            .map_err(|_| RefereeError::Crypto("cancel_pubkey must be 32 bytes".into()))?;
+        let vk = VerifyingKey::from_bytes(&pk_arr)
+            .map_err(|e| RefereeError::Crypto(format!("cancel_pubkey: {e}")))?;
+        let sig_bytes =
+            hex::decode(sig_hex).map_err(|e| RefereeError::Crypto(format!("sig hex: {e}")))?;
+        let sig_arr: [u8; 64] = sig_bytes
+            .try_into()
+            .map_err(|_| RefereeError::Crypto("sig must be 64 bytes".into()))?;
+        let sig = Signature::from_bytes(&sig_arr);
+        vk.verify(body, &sig)
+            .map_err(|e| RefereeError::Crypto(format!("cancel sig verify: {e}")))
     }
 
     /// Verify a canonical signature. Used by the wallet implementor and
