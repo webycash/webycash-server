@@ -39,8 +39,7 @@ fn arb_asset_name() -> impl Strategy<Value = String> {
 fn arb_namespace() -> impl Strategy<Value = Namespace> {
     prop_oneof![
         Just(Namespace::unscoped()),
-        (arb_contract(), arb_fingerprint())
-            .prop_map(|(c, f)| Namespace::scoped(c, f)),
+        (arb_contract(), arb_fingerprint()).prop_map(|(c, f)| Namespace::scoped(c, f)),
     ]
 }
 

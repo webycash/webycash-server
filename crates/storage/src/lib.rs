@@ -23,12 +23,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use webycash_asset_core::{Asset, ContractId, IssuedAsset, PgpFingerprint};
 
-#[cfg(feature = "redis")]
-pub mod redis_backend;
 #[cfg(feature = "dynamodb")]
 pub mod dynamodb_backend;
 #[cfg(feature = "fdb")]
 pub mod fdb_backend;
+#[cfg(feature = "redis")]
+pub mod redis_backend;
 #[cfg(all(feature = "redis", feature = "fdb"))]
 pub mod redis_fdb_backend;
 
@@ -216,11 +216,7 @@ pub trait LedgerStore<A: Asset>: Send + Sync + 'static {
     /// Permanent destruction. Each `(hash, BurnRecord)` pair marks
     /// the hash spent without inserting a replacement. All-or-nothing
     /// per backend's atomic primitive.
-    async fn batch_burn(
-        &self,
-        ns: &Namespace,
-        ops: &[(String, BurnRecord)],
-    ) -> anyhow::Result<()>;
+    async fn batch_burn(&self, ns: &Namespace, ops: &[(String, BurnRecord)]) -> anyhow::Result<()>;
 
     /// Read the current `MiningState` singleton. `None` on a fresh
     /// store before the first mining_report.
@@ -384,7 +380,10 @@ mod tests {
         let s = WebcashLegacyKeys;
         let ns = Namespace::unscoped();
         assert_eq!(s.token_key("webcash", &ns, "abc"), "token:abc");
-        assert_eq!(s.replacement_key("webcash", &ns, "op1"), "audit:replace:op1");
+        assert_eq!(
+            s.replacement_key("webcash", &ns, "op1"),
+            "audit:replace:op1"
+        );
         assert_eq!(s.burn_key("webcash", &ns, "b1"), "audit:burn:b1");
         assert_eq!(s.mining_state_key("webcash"), "mining:state");
     }

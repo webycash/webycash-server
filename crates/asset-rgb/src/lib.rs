@@ -24,9 +24,7 @@ pub mod htlc;
 mod token;
 
 pub use htlc::{execute_predicate, HtlcState, HtlcWitness, PredicateError, PredicateResult};
-pub use token::{
-    PublicCollectible, PublicFungible, SecretCollectible, SecretFungible, TokenError,
-};
+pub use token::{PublicCollectible, PublicFungible, SecretCollectible, SecretFungible, TokenError};
 
 use std::collections::HashMap;
 
@@ -538,8 +536,7 @@ fn parse_htlc_locks(body: &[u8]) -> AssetResult<Vec<HtlcLockEntry>> {
     let Some(arr) = v.get("htlc_locks") else {
         return Ok(Vec::new());
     };
-    serde_json::from_value(arr.clone())
-        .map_err(|e| AssetError::Parse(format!("htlc_locks: {e}")))
+    serde_json::from_value(arr.clone()).map_err(|e| AssetError::Parse(format!("htlc_locks: {e}")))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -767,7 +764,9 @@ mod tests {
         let b = collectible(&"b".repeat(64), "rgb21-other", fp(0xbb));
         let err = RgbCollectible::validate_transfer(&a, &b).unwrap_err();
         // Reports the first mismatch encountered (contract_id).
-        assert!(matches!(err, webycash_asset_core::AssetError::Invariant(msg) if msg.contains("contract_id")));
+        assert!(
+            matches!(err, webycash_asset_core::AssetError::Invariant(msg) if msg.contains("contract_id"))
+        );
     }
 
     fn rgb_record(contract: &str, issuer: PgpFingerprint) -> RgbFungibleRecord {

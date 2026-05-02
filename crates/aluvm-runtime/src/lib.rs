@@ -99,8 +99,8 @@ impl Runtime {
         code: Vec<Instr<LibId>>,
         complexity_lim: Option<u64>,
     ) -> Result<(), AluVmError> {
-        let compiled = CompiledLib::compile(code, &[])
-            .map_err(|e| AluVmError::Compile(format!("{e:?}")))?;
+        let compiled =
+            CompiledLib::compile(code, &[]).map_err(|e| AluVmError::Compile(format!("{e:?}")))?;
         let lib = compiled.into_lib();
         self.execute_lib(&lib, 0, complexity_lim)
     }

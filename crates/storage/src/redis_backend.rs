@@ -140,7 +140,10 @@ where
         // scoped on (contract_id, issuer_fp)). Storage keys are derived per record.
         records.iter().for_each(|r| {
             pipe.cmd("HSETNX")
-                .arg(self.keys.token_key(A::NAME, &r.namespace(), r.public_hash()))
+                .arg(
+                    self.keys
+                        .token_key(A::NAME, &r.namespace(), r.public_hash()),
+                )
                 .arg("amount_wats")
                 .arg(r.amount_wats().to_string());
         });
@@ -152,7 +155,9 @@ where
                 let mut fields = HashMap::new();
                 r.to_fields(&mut fields);
                 fields.remove("amount_wats");
-                let k = self.keys.token_key(A::NAME, &r.namespace(), r.public_hash());
+                let k = self
+                    .keys
+                    .token_key(A::NAME, &r.namespace(), r.public_hash());
                 let cmd = set_pipe.cmd("HSET");
                 cmd.arg(&k);
                 fields.iter().for_each(|(name, value)| {
@@ -303,11 +308,7 @@ where
         }
     }
 
-    async fn batch_burn(
-        &self,
-        ns: &Namespace,
-        ops: &[(String, BurnRecord)],
-    ) -> anyhow::Result<()> {
+    async fn batch_burn(&self, ns: &Namespace, ops: &[(String, BurnRecord)]) -> anyhow::Result<()> {
         if ops.is_empty() {
             return Ok(());
         }
@@ -354,9 +355,7 @@ where
     async fn update_mining_state(&self, state: &MiningState) -> anyhow::Result<()> {
         let mut conn = self.conn();
         let json = serde_json::to_string(state)?;
-        let _: () = conn
-            .set(self.keys.mining_state_key(A::NAME), &json)
-            .await?;
+        let _: () = conn.set(self.keys.mining_state_key(A::NAME), &json).await?;
         Ok(())
     }
 }

@@ -84,11 +84,7 @@ impl AuditEntry {
 pub trait AuditLog: Send + Sync + 'static {
     /// Append a new (unsigned) entry, signing it with the referee's
     /// identity. Returns the new tip hash.
-    async fn append(
-        &self,
-        identity: &Identity,
-        entry: &mut AuditEntry,
-    ) -> Result<String>;
+    async fn append(&self, identity: &Identity, entry: &mut AuditEntry) -> Result<String>;
 
     /// Read all entries for a swap, oldest-first.
     async fn entries_for(&self, swap_id: &SwapId) -> Result<Vec<AuditEntry>>;
@@ -111,11 +107,7 @@ pub struct InMemoryAuditLog {
 
 #[async_trait::async_trait]
 impl AuditLog for InMemoryAuditLog {
-    async fn append(
-        &self,
-        identity: &Identity,
-        entry: &mut AuditEntry,
-    ) -> Result<String> {
+    async fn append(&self, identity: &Identity, entry: &mut AuditEntry) -> Result<String> {
         let canonical = entry.canonical_body();
         let tag = tag_for_phase(&entry.phase);
         entry.signature = identity.sign(tag, &canonical);

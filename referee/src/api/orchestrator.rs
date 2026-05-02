@@ -32,9 +32,7 @@ use crate::error::{RefereeError, Result};
 use crate::musig2::{Musig2Signer, Session};
 use crate::push::{PushKind, PushRequest, PushTransport};
 use crate::sign::Identity;
-use crate::state::{
-    self, AlicePayload, BobPayload, Musig2Sessions, Parties, SwapId, SwapState,
-};
+use crate::state::{self, AlicePayload, BobPayload, Musig2Sessions, Parties, SwapId, SwapState};
 use crate::store::{PersistedSwap, SwapStore};
 use crate::zkp::{Circuit, Verifier};
 
@@ -143,16 +141,8 @@ impl Orchestrator {
         let id = swap_id;
 
         // 1) Begin two MuSig2 sessions (settle + refund).
-        let settle_pub_nonce = self
-            .musig
-            .begin_session(&id, Session::Settle)
-            .await?
-            .0;
-        let refund_pub_nonce = self
-            .musig
-            .begin_session(&id, Session::Refund)
-            .await?
-            .0;
+        let settle_pub_nonce = self.musig.begin_session(&id, Session::Settle).await?.0;
+        let refund_pub_nonce = self.musig.begin_session(&id, Session::Refund).await?.0;
         let referee_sessions = Musig2Sessions {
             settle_pub_nonce,
             refund_pub_nonce,
@@ -205,19 +195,36 @@ impl Orchestrator {
             .await?;
 
         // 4) Verify both ZKPs.
-        let ok_bob = self.verifier.verify(Circuit::BobPayload, &bob.zkp_payload).await?;
+        let ok_bob = self
+            .verifier
+            .verify(Circuit::BobPayload, &bob.zkp_payload)
+            .await?;
         let ok_alice = self
             .verifier
             .verify(Circuit::AliceSignature, &alice.zkp_signature)
             .await?;
-        let zkps_tip = self.audit_phase(&id, "zkps-verified", json_obj(&[("ok_bob", ok_bob.into()), ("ok_alice", ok_alice.into())]), &initial.audit_tip_hex).await?;
+        let zkps_tip = self
+            .audit_phase(
+                &id,
+                "zkps-verified",
+                json_obj(&[("ok_bob", ok_bob.into()), ("ok_alice", ok_alice.into())]),
+                &initial.audit_tip_hex,
+            )
+            .await?;
         let zkps_state = state::verify_zkps(initial, ok_bob && ok_alice, self.now(), zkps_tip)?;
         self.persist(&zkps_state, "zkps-verified").await?;
 
         // 5) Pre-check the webcash leg.
         let pre_status = self.webcash.check(&zkps_state.bob.h_b).await?;
         let unspent = pre_status == SpentStatus::Unspent;
-        let pre_tip = self.audit_phase(&id, "pre-checked", serde_json::json!({"unspent": unspent}), &zkps_state.audit_tip_hex).await?;
+        let pre_tip = self
+            .audit_phase(
+                &id,
+                "pre-checked",
+                serde_json::json!({"unspent": unspent}),
+                &zkps_state.audit_tip_hex,
+            )
+            .await?;
         let pre_state = state::pre_check(zkps_state, unspent, self.now(), pre_tip)?;
         self.persist(&pre_state, "pre-checked").await?;
 
@@ -233,7 +240,12 @@ impl Orchestrator {
                 })
                 .await?;
             let push_tip = self
-                .audit_phase(&id, "insert-pushed", serde_json::json!({"attempt": 1}), &pre_state.audit_tip_hex)
+                .audit_phase(
+                    &id,
+                    "insert-pushed",
+                    serde_json::json!({"attempt": 1}),
+                    &pre_state.audit_tip_hex,
+                )
                 .await?;
             let s = state::insert_pushed_from_pre(pre_state, self.now(), push_tip);
             self.persist(&s, "insert-pushed").await?;
@@ -253,7 +265,12 @@ impl Orchestrator {
             if post == SpentStatus::Spent {
                 let outcome = state::PostCheckOutcome::Settled;
                 let settled_tip = self
-                    .audit_phase(&id, "settled", serde_json::json!({}), &push_state.audit_tip_hex)
+                    .audit_phase(
+                        &id,
+                        "settled",
+                        serde_json::json!({}),
+                        &push_state.audit_tip_hex,
+                    )
                     .await?;
                 let settled = state::settle(push_state, outcome, self.now(), settled_tip)?;
 
@@ -301,7 +318,12 @@ impl Orchestrator {
                     .await?;
                 let new_attempt = (push_state.insert_push_attempts as u32) + 1;
                 let retry_tip = self
-                    .audit_phase(&id, "insert-pushed", serde_json::json!({"attempt": new_attempt}), &push_state.audit_tip_hex)
+                    .audit_phase(
+                        &id,
+                        "insert-pushed",
+                        serde_json::json!({"attempt": new_attempt}),
+                        &push_state.audit_tip_hex,
+                    )
                     .await?;
                 push_state = state::insert_pushed_retry(push_state, self.now(), retry_tip)?;
                 self.persist(&push_state, "insert-pushed").await?;
@@ -310,7 +332,12 @@ impl Orchestrator {
 
             // Retries exhausted: abort path.
             let abort_tip = self
-                .audit_phase(&id, "aborted", serde_json::json!({"attempts": push_state.insert_push_attempts}), &push_state.audit_tip_hex)
+                .audit_phase(
+                    &id,
+                    "aborted",
+                    serde_json::json!({"attempts": push_state.insert_push_attempts}),
+                    &push_state.audit_tip_hex,
+                )
                 .await?;
             let aborted = state::abort(push_state, true, self.now(), abort_tip)?;
             self.persist(&aborted, "aborted").await?;
@@ -331,7 +358,12 @@ impl Orchestrator {
             // single-shot orchestrator path we treat the dispatch ack as
             // sufficient — production wires real ack-callbacks.
             let inv_tip = self
-                .audit_phase(&id, "invalidated", serde_json::json!({"acked": true}), &aborted.audit_tip_hex)
+                .audit_phase(
+                    &id,
+                    "invalidated",
+                    serde_json::json!({"acked": true}),
+                    &aborted.audit_tip_hex,
+                )
                 .await?;
             let invalidated = state::invalidated(aborted, true, self.now(), inv_tip)?;
             self.persist(&invalidated, "invalidated").await?;
@@ -358,7 +390,12 @@ impl Orchestrator {
                 .await?;
 
             let refunded_tip = self
-                .audit_phase(&id, "refunded", serde_json::json!({}), &invalidated.audit_tip_hex)
+                .audit_phase(
+                    &id,
+                    "refunded",
+                    serde_json::json!({}),
+                    &invalidated.audit_tip_hex,
+                )
                 .await?;
             let refunded = state::refunded(invalidated, self.now(), refunded_tip);
             self.persist(&refunded, "refunded").await?;
@@ -396,11 +433,7 @@ impl Orchestrator {
         self.audit.append(&self.identity, &mut entry).await
     }
 
-    async fn persist<P: state::Phase>(
-        &self,
-        s: &SwapState<P>,
-        phase: &str,
-    ) -> Result<()> {
+    async fn persist<P: state::Phase>(&self, s: &SwapState<P>, phase: &str) -> Result<()> {
         let inner = serde_json::to_value(s).map_err(RefereeError::from)?;
         let row = PersistedSwap {
             id: s.id.clone(),

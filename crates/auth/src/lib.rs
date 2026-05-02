@@ -82,8 +82,8 @@ impl IssuerRegistry {
 
     /// Add issuer from hex-encoded pubkey.
     pub fn add_hex(&mut self, fp: &str, pubkey_hex: &str) -> Result<(), AuthError> {
-        let bytes = hex::decode(pubkey_hex)
-            .map_err(|e| AuthError::MalformedPubkey(format!("hex: {e}")))?;
+        let bytes =
+            hex::decode(pubkey_hex).map_err(|e| AuthError::MalformedPubkey(format!("hex: {e}")))?;
         self.add(fp, &bytes)
     }
 
@@ -145,8 +145,7 @@ impl IssuerRegistry {
                 // Pragmatic: ask the caller to use the modern Ed25519 (RFC 9580)
                 // packet form. Most tooling has migrated.
                 return Err(AuthError::MalformedPubkey(
-                    "legacy EdDSA cert; please re-export with RFC 9580 Ed25519 packet"
-                        .into(),
+                    "legacy EdDSA cert; please re-export with RFC 9580 Ed25519 packet".into(),
                 ));
             }
             other => {
@@ -192,10 +191,7 @@ impl NonceCache {
     /// Returns `Ok(())` if `(fp, nonce)` is fresh; `Err(ReplayedNonce)` if
     /// already seen. Caller must hold the gate AFTER signature verification.
     pub fn check_and_insert(&self, fp: &PgpFingerprint, nonce: &str) -> Result<(), AuthError> {
-        let mut seen = self
-            .seen
-            .lock()
-            .map_err(|_| AuthError::InvalidSignature)?;
+        let mut seen = self.seen.lock().map_err(|_| AuthError::InvalidSignature)?;
         if seen.len() >= self.max_size {
             seen.clear();
         }
@@ -277,9 +273,7 @@ mod tests {
     #[cfg(feature = "openpgp")]
     #[test]
     fn pgp_armored_cert_round_trip() {
-        use pgp::composed::{
-            EncryptionCaps, KeyType, SecretKeyParamsBuilder, SignedPublicKey,
-        };
+        use pgp::composed::{EncryptionCaps, KeyType, SecretKeyParamsBuilder, SignedPublicKey};
         use pgp::types::{KeyDetails as _, PlainSecretParams};
         use rand::rngs::StdRng;
         use rand::SeedableRng;
@@ -294,9 +288,7 @@ mod tests {
             .passphrase(None)
             .build()
             .expect("build params");
-        let signed_secret = key_params
-            .generate(&mut rng)
-            .expect("generate secret key");
+        let signed_secret = key_params.generate(&mut rng).expect("generate secret key");
 
         // Extract the raw 32-byte Ed25519 secret seed.
         let seed = signed_secret
@@ -320,7 +312,12 @@ mod tests {
         let fp_hex = reg.add_pgp_armored(&armor).expect("register");
         assert_eq!(
             fp_hex,
-            hex::encode(SignedPublicKey::from(signed_secret).primary_key.fingerprint().as_bytes())
+            hex::encode(
+                SignedPublicKey::from(signed_secret)
+                    .primary_key
+                    .fingerprint()
+                    .as_bytes()
+            )
         );
 
         // The signature produced via ed25519-dalek (using the seed we

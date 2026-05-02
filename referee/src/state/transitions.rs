@@ -101,10 +101,10 @@ pub fn insert_pushed_retry(
     now_unix: u64,
     new_audit_tip: String,
 ) -> Result<SwapState<InsertPushed>> {
-    s.insert_push_attempts =
-        s.insert_push_attempts.checked_add(1).ok_or_else(|| {
-            RefereeError::InvalidTransition("insert_push_attempts overflow".into())
-        })?;
+    s.insert_push_attempts = s
+        .insert_push_attempts
+        .checked_add(1)
+        .ok_or_else(|| RefereeError::InvalidTransition("insert_push_attempts overflow".into()))?;
     s.phase_entered_at = now_unix;
     s.audit_tip_hex = new_audit_tip;
     Ok(s)

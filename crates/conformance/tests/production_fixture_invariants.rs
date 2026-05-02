@@ -108,7 +108,9 @@ fn post_fixtures_carry_legalese_terms_true() {
         if fx.request.method != "POST" {
             continue;
         }
-        let Some(body) = &fx.request.body else { continue };
+        let Some(body) = &fx.request.body else {
+            continue;
+        };
         let Some(terms) = body.pointer("/legalese/terms") else {
             // A few captured fixtures (like deliberately-malformed
             // examples) intentionally omit legalese — those don't

@@ -106,7 +106,10 @@ impl ContractId {
                 s.len()
             )));
         }
-        if !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        if !s
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
             return Err(AssetError::Parse(
                 "ContractId must be alphanumeric, '-', or '_'".into(),
             ));
@@ -393,8 +396,7 @@ mod tests {
 
     #[test]
     fn pgp_fingerprint_rejects_mixed_case() {
-        let err = PgpFingerprint::parse("Aabbccddeeff00112233445566778899aabbccdd")
-            .unwrap_err();
+        let err = PgpFingerprint::parse("Aabbccddeeff00112233445566778899aabbccdd").unwrap_err();
         assert!(matches!(err, AssetError::Parse(_)));
     }
 

@@ -38,12 +38,14 @@ fn voucher_lifecycle_with_namespace_enforcement() {
     assert_eq!(mining_resp.0, 200, "mine: {}", mining_resp.1);
 
     // 2. health_check after mine: spent: false
-    let hc_body = serde_json::json!([format!(
-        "e10.0:public:{public_hash}:{contract}:{issuer}"
-    )]);
+    let hc_body = serde_json::json!([format!("e10.0:public:{public_hash}:{contract}:{issuer}")]);
     let hc_resp = harness.post("/api/v1/health_check", hc_body).unwrap();
     assert_eq!(hc_resp.0, 200);
-    assert!(hc_resp.1.contains(r#""spent": false"#), "hc1: {}", hc_resp.1);
+    assert!(
+        hc_resp.1.contains(r#""spent": false"#),
+        "hc1: {}",
+        hc_resp.1
+    );
 
     // 3. Split 10 → 3 + 7 within same namespace.
     let out1 = "d".repeat(64);

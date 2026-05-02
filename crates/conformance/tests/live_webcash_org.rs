@@ -30,8 +30,7 @@ const PRODUCTION_BASE: &str = "https://webcash.org";
 fn target_endpoint_shape_matches_fixture() {
     let fx = fixtures::load("get_target").expect("get_target.json");
     let live = fetch_get(&format!("{PRODUCTION_BASE}/api/v1/target")).expect("fetch live target");
-    let parsed: serde_json::Value =
-        serde_json::from_str(&live.body).expect("body must be JSON");
+    let parsed: serde_json::Value = serde_json::from_str(&live.body).expect("body must be JSON");
     let captured = fx.response.body_parsed.as_ref().expect("captured parsed");
 
     // Field SET must match (values can vary: epoch advances, ratio changes).
@@ -78,8 +77,7 @@ fn health_check_unknown_hash_responds_with_null() {
     )
     .expect("fetch live health_check");
     assert_eq!(live.status, 200);
-    let parsed: serde_json::Value =
-        serde_json::from_str(&live.body).expect("body must be JSON");
+    let parsed: serde_json::Value = serde_json::from_str(&live.body).expect("body must be JSON");
     assert_eq!(parsed["status"], "success");
     let results = parsed["results"].as_object().expect("results object");
     assert_eq!(results.len(), 1);

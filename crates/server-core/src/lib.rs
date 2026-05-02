@@ -31,12 +31,12 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
 use webycash_asset_core::{
-    Amount, Asset, AssetPublic, CollectibleRecordBuilder, IssuedAsset, MintableAsset, RecordBuilder,
-    RecordOrigin, SplittableAsset, TransferableAsset,
+    Amount, Asset, AssetPublic, CollectibleRecordBuilder, IssuedAsset, MintableAsset,
+    RecordBuilder, RecordOrigin, SplittableAsset, TransferableAsset,
 };
+use webycash_asset_core::{ContractId, PgpFingerprint};
 use webycash_auth::{IssuerRegistry, NonceCache};
 use webycash_mining::MiningConfig;
-use webycash_asset_core::{ContractId, PgpFingerprint};
 use webycash_storage::{
     BurnRecord, HashRecord, LedgerStore, Namespace, ReplaceOp, ReplaceResult, ReplacementRecord,
 };
@@ -116,7 +116,6 @@ impl<A: Asset, S: LedgerStore<A>> Server<A, S> {
     }
 }
 
-
 /// Bind to `config.bind_addr` and serve hyper requests until cancelled.
 ///
 /// Builds with hyper-util's auto Builder so HTTP/1.1 keep-alive AND HTTP/2
@@ -186,10 +185,7 @@ where
     }
 }
 
-async fn route_issued<A, S>(
-    state: &Server<A, S>,
-    req: Request<Incoming>,
-) -> Response<Full<Bytes>>
+async fn route_issued<A, S>(state: &Server<A, S>, req: Request<Incoming>) -> Response<Full<Bytes>>
 where
     A: Asset
         + MintableAsset
@@ -241,9 +237,7 @@ where
         tokio::spawn(async move {
             let svc = service_fn(move |req: Request<Incoming>| {
                 let state = state.clone();
-                async move {
-                    Ok::<_, Infallible>(route_collectible::<A, S>(&state, req).await)
-                }
+                async move { Ok::<_, Infallible>(route_collectible::<A, S>(&state, req).await) }
             });
             let builder = Builder::new(TokioExecutor::new());
             if let Err(e) = builder.serve_connection(TokioIo::new(stream), svc).await {
@@ -279,12 +273,8 @@ where
         (&Method::POST, "/api/v1/replace") => {
             handlers::replace_collectible::<A, S>(state, req).await
         }
-        (&Method::POST, "/api/v1/burn") => {
-            handlers::burn_collectible::<A, S>(state, req).await
-        }
-        (&Method::POST, "/api/v1/issue") => {
-            handlers::issue_collectible::<A, S>(state, req).await
-        }
+        (&Method::POST, "/api/v1/burn") => handlers::burn_collectible::<A, S>(state, req).await,
+        (&Method::POST, "/api/v1/issue") => handlers::issue_collectible::<A, S>(state, req).await,
         _ => not_found(),
     }
 }
@@ -298,9 +288,7 @@ where
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/api/v1/target") => handlers::target::<A, S>(state).await,
         (&Method::GET, "/terms") | (&Method::GET, "/terms/text") => handlers::terms().await,
-        (&Method::POST, "/api/v1/health_check") => {
-            handlers::health_check::<A, S>(state, req).await
-        }
+        (&Method::POST, "/api/v1/health_check") => handlers::health_check::<A, S>(state, req).await,
         (&Method::POST, "/api/v1/replace") => handlers::replace::<A, S>(state, req).await,
         (&Method::POST, "/api/v1/mining_report") => {
             handlers::mining_report::<A, S>(state, req).await
@@ -310,7 +298,6 @@ where
         _ => not_found(),
     }
 }
-
 
 fn not_found() -> Response<Full<Bytes>> {
     let body = "<html><title>404: Not Found</title><body>404: Not Found</body></html>";
@@ -493,9 +480,7 @@ mod handlers {
             std::collections::HashMap::new();
         for (idx, (hash, public)) in hashes.iter().zip(publics.iter()).enumerate() {
             let ns = match A::public_namespace_envelope(public) {
-                Some((c, i)) => {
-                    Namespace::scoped(ContractId(c), PgpFingerprint(i))
-                }
+                Some((c, i)) => Namespace::scoped(ContractId(c), PgpFingerprint(i)),
                 None => Namespace::unscoped(),
             };
             by_ns.entry(ns).or_default().push((idx, hash.clone()));
@@ -611,11 +596,7 @@ mod handlers {
             Err(e) => return server_error(&format!("parse: {e}")),
         };
 
-        if !parsed
-            .legalese
-            .as_ref()
-            .is_some_and(|l| l.terms)
-        {
+        if !parsed.legalese.as_ref().is_some_and(|l| l.terms) {
             // Production matches: legalese rejection returns 500. We
             // align with that for now; real production may return 400.
             return server_error("legalese.terms must be true");
@@ -704,25 +685,18 @@ mod handlers {
         };
         // Every input must exist in the store (else the replace would
         // fail at batch_replace anyway; we surface a clearer 422 here).
-        let mut concrete_inputs: Vec<A::Record> =
-            Vec::with_capacity(input_records_full.len());
+        let mut concrete_inputs: Vec<A::Record> = Vec::with_capacity(input_records_full.len());
         for (i, rec) in input_records_full.into_iter().enumerate() {
             match rec {
                 Some(r) => concrete_inputs.push(r),
                 None => {
-                    return server_error(&format!(
-                        "input token not found: {}",
-                        input_hashes[i]
-                    ));
+                    return server_error(&format!("input token not found: {}", input_hashes[i]));
                 }
             }
         }
-        if let Err(e) = A::validate_replace_request(
-            &body,
-            &concrete_inputs,
-            &output_secrets,
-            server_now_unix,
-        ) {
+        if let Err(e) =
+            A::validate_replace_request(&body, &concrete_inputs, &output_secrets, server_now_unix)
+        {
             return server_error(&format!("{e}"));
         }
 
@@ -734,8 +708,10 @@ mod handlers {
         if let Err(e) = A::augment_output_records(&body, &mut outputs, server_now_unix) {
             return server_error(&format!("{e}"));
         }
-        let output_hashes: Vec<String> =
-            outputs.iter().map(|r| r.public_hash().to_string()).collect();
+        let output_hashes: Vec<String> = outputs
+            .iter()
+            .map(|r| r.public_hash().to_string())
+            .collect();
         let record = ReplacementRecord {
             id: uuid::Uuid::new_v4().to_string(),
             input_hashes: input_hashes.clone(),
@@ -806,11 +782,7 @@ mod handlers {
             Ok(v) => v,
             Err(e) => return server_error(&format!("parse: {e}")),
         };
-        if !report
-            .legalese
-            .as_ref()
-            .is_some_and(|l| l.terms)
-        {
+        if !report.legalese.as_ref().is_some_and(|l| l.terms) {
             return server_error("legalese.terms must be true");
         }
 
@@ -822,9 +794,7 @@ mod handlers {
 
         // PoW check — SHA256 of the submitted preimage bytes (raw JSON or base64).
         if !webycash_mining::verify_pow(&report.preimage, target_bits) {
-            return server_error(&format!(
-                "proof-of-work below target ({target_bits} bits)"
-            ));
+            return server_error(&format!("proof-of-work below target ({target_bits} bits)"));
         }
 
         // Decode preimage: try base64 first (GPU/C++ miner), fallback to raw JSON.
@@ -838,9 +808,8 @@ mod handlers {
         };
 
         // Parse all webcash + subsidy outputs as MINED records.
-        let mut records: Vec<A::Record> = Vec::with_capacity(
-            preimage.webcash.len() + preimage.subsidy.len(),
-        );
+        let mut records: Vec<A::Record> =
+            Vec::with_capacity(preimage.webcash.len() + preimage.subsidy.len());
         for token in preimage.webcash.iter().chain(preimage.subsidy.iter()) {
             match A::parse_secret(token) {
                 Ok(secret) => {
@@ -866,12 +835,7 @@ mod handlers {
         state_now.difficulty_target_bits = target_bits;
         state_now.mining_amount_wats = cfg.mining_amount_wats;
         state_now.subsidy_amount_wats = cfg.subsidy_amount_wats;
-        let added: i64 = records
-            .iter()
-            .map(|r| {
-                r.amount_wats()
-            })
-            .sum();
+        let added: i64 = records.iter().map(|r| r.amount_wats()).sum();
         state_now.total_circulation_wats = state_now.total_circulation_wats.saturating_add(added);
         let _ = state.store.update_mining_state(&state_now).await;
 
@@ -896,10 +860,7 @@ mod handlers {
     /// bytes as received). Server validates against the registered issuer
     /// pubkey, checks nonce isn't replayed, parses outputs, and inserts
     /// them as Issued records.
-    pub async fn issue<A, S>(
-        state: &Server<A, S>,
-        req: Request<Incoming>,
-    ) -> Response<Full<Bytes>>
+    pub async fn issue<A, S>(state: &Server<A, S>, req: Request<Incoming>) -> Response<Full<Bytes>>
     where
         A: Asset + SplittableAsset + RecordBuilder + IssuedAsset,
         A::Record: HashRecord,
@@ -1030,8 +991,7 @@ mod handlers {
             }
         }
 
-        let mut lookups: Vec<(String, Option<bool>)> =
-            vec![(String::new(), None); hashes.len()];
+        let mut lookups: Vec<(String, Option<bool>)> = vec![(String::new(), None); hashes.len()];
         let mut by_ns: std::collections::HashMap<Namespace, Vec<(usize, String)>> =
             std::collections::HashMap::new();
         for (idx, (hash, public)) in hashes.iter().zip(publics.iter()).enumerate() {
@@ -1133,9 +1093,7 @@ mod handlers {
         }
         // Non-splittable arity: exactly 1 input, exactly 1 output.
         if parsed.webcashes.len() != 1 || parsed.new_webcashes.len() != 1 {
-            return server_error(
-                "non-splittable replace requires exactly 1 input and 1 output",
-            );
+            return server_error("non-splittable replace requires exactly 1 input and 1 output");
         }
         let input = match A::parse_secret(&parsed.webcashes[0]) {
             Ok(s) => s,
@@ -1181,11 +1139,10 @@ mod handlers {
         // requires preimage + correct claim-owner; refund path requires
         // timeout + correct refund-owner. The hook reads the raw body to
         // extract `htlc_witnesses`/`htlc_locks` slots.
-        let input_records_full =
-            match state.store.get_tokens(&ns, &[input_hash.clone()]).await {
-                Ok(rs) => rs,
-                Err(e) => return server_error(&format!("storage: {e}")),
-            };
+        let input_records_full = match state.store.get_tokens(&ns, &[input_hash.clone()]).await {
+            Ok(rs) => rs,
+            Err(e) => return server_error(&format!("storage: {e}")),
+        };
         let concrete_inputs: Vec<A::Record> = match input_records_full.into_iter().next() {
             Some(Some(r)) => vec![r],
             _ => return server_error(&format!("input token not found: {input_hash}")),
@@ -1349,9 +1306,7 @@ mod handlers {
         }
         let records: Vec<A::Record> = secrets
             .iter()
-            .map(|s| {
-                <A as CollectibleRecordBuilder>::record_from_secret(s, RecordOrigin::Replaced)
-            })
+            .map(|s| <A as CollectibleRecordBuilder>::record_from_secret(s, RecordOrigin::Replaced))
             .collect();
         if let Err(e) = state.store.insert_tokens(&records).await {
             return server_error(&format!("insert: {e}"));
@@ -1363,10 +1318,7 @@ mod handlers {
     ///
     /// Body shape: `{"webcash": "e{amt}:secret:{hex}", "legalese": {"terms": true}}`.
     /// Marks the token as spent, records an audit entry.
-    pub async fn burn<A, S>(
-        state: &Server<A, S>,
-        req: Request<Incoming>,
-    ) -> Response<Full<Bytes>>
+    pub async fn burn<A, S>(state: &Server<A, S>, req: Request<Incoming>) -> Response<Full<Bytes>>
     where
         A: Asset + SplittableAsset + RecordBuilder,
         S: LedgerStore<A>,
@@ -1385,11 +1337,7 @@ mod handlers {
             Ok(v) => v,
             Err(e) => return server_error(&format!("parse: {e}")),
         };
-        if !parsed
-            .legalese
-            .as_ref()
-            .is_some_and(|l| l.terms)
-        {
+        if !parsed.legalese.as_ref().is_some_and(|l| l.terms) {
             return server_error("legalese.terms must be true");
         }
         let secret = match A::parse_secret(&parsed.webcash) {
@@ -1515,5 +1463,4 @@ mod tests {
             "e1.5:public:0000000000000000000000000000000000000000000000000000000000000000"
         );
     }
-
 }

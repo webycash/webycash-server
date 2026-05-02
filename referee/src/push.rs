@@ -103,8 +103,8 @@ impl HttpPush {
     /// Uses the audited `hmac` crate from RustCrypto. The output is
     /// 32 bytes hex-encoded (64 chars) — matches `docs/push-notification.md`.
     pub fn hmac(&self, body: &[u8]) -> String {
-        let mut mac = HmacSha256::new_from_slice(&self.hmac_key)
-            .expect("HMAC accepts any key length");
+        let mut mac =
+            HmacSha256::new_from_slice(&self.hmac_key).expect("HMAC accepts any key length");
         mac.update(body);
         hex::encode(mac.finalize().into_bytes())
     }

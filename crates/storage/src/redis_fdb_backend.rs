@@ -114,11 +114,7 @@ where
         results
     }
 
-    async fn batch_burn(
-        &self,
-        ns: &Namespace,
-        ops: &[(String, BurnRecord)],
-    ) -> anyhow::Result<()> {
+    async fn batch_burn(&self, ns: &Namespace, ops: &[(String, BurnRecord)]) -> anyhow::Result<()> {
         self.fdb.batch_burn(ns, ops).await
     }
 

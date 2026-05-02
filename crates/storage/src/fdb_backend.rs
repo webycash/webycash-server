@@ -48,8 +48,9 @@ where
         let db = match cluster_file {
             Some(path) => Database::from_path(path)
                 .map_err(|e| anyhow::anyhow!("FDB cluster file {}: {}", path, e))?,
-            None => Database::default()
-                .map_err(|e| anyhow::anyhow!("default FDB database: {}", e))?,
+            None => {
+                Database::default().map_err(|e| anyhow::anyhow!("default FDB database: {}", e))?
+            }
         };
         Ok(Self {
             db,
@@ -105,8 +106,7 @@ fn trx_set_json<T: serde::Serialize>(
     key: &[u8],
     value: &T,
 ) -> Result<(), FdbBindingError> {
-    let json = serde_json::to_vec(value)
-        .map_err(|e| FdbBindingError::CustomError(Box::new(e)))?;
+    let json = serde_json::to_vec(value).map_err(|e| FdbBindingError::CustomError(Box::new(e)))?;
     trx.set(key, &json);
     Ok(())
 }
@@ -157,10 +157,7 @@ where
         if hashes.is_empty() {
             return Ok(Vec::new());
         }
-        let keys: Vec<Vec<u8>> = hashes
-            .iter()
-            .map(|h| self.token_key_bytes(ns, h))
-            .collect();
+        let keys: Vec<Vec<u8>> = hashes.iter().map(|h| self.token_key_bytes(ns, h)).collect();
         self.db
             .run(|trx, _maybe_committed| {
                 let keys = keys.clone();
@@ -216,11 +213,7 @@ where
         out
     }
 
-    async fn batch_burn(
-        &self,
-        ns: &Namespace,
-        ops: &[(String, BurnRecord)],
-    ) -> anyhow::Result<()> {
+    async fn batch_burn(&self, ns: &Namespace, ops: &[(String, BurnRecord)]) -> anyhow::Result<()> {
         for (hash, record) in ops {
             self.exec_burn(ns, hash, record).await?;
         }
@@ -259,11 +252,7 @@ impl<A: Asset, K: KeyStrategy> FdbStore<A, K>
 where
     A::Record: HashRecord + serde::Serialize + serde::de::DeserializeOwned,
 {
-    async fn exec_replace(
-        &self,
-        ns: &Namespace,
-        op: &ReplaceOp<A::Record>,
-    ) -> anyhow::Result<()> {
+    async fn exec_replace(&self, ns: &Namespace, op: &ReplaceOp<A::Record>) -> anyhow::Result<()> {
         // Pre-compute keys + JSON to keep the closure light.
         let input_keys: Vec<Vec<u8>> = op
             .inputs
@@ -299,10 +288,8 @@ where
                                 ));
                             }
                             Some(v) => {
-                                let already_spent = v
-                                    .get("spent")
-                                    .and_then(|x| x.as_bool())
-                                    .unwrap_or(false);
+                                let already_spent =
+                                    v.get("spent").and_then(|x| x.as_bool()).unwrap_or(false);
                                 if already_spent {
                                     return Err(FdbBindingError::CustomError(
                                         "input token already spent".into(),
@@ -313,9 +300,7 @@ where
                                     obj.insert("spent".into(), serde_json::Value::Bool(true));
                                     obj.insert(
                                         "spent_at".into(),
-                                        serde_json::Value::String(
-                                            chrono::Utc::now().to_rfc3339(),
-                                        ),
+                                        serde_json::Value::String(chrono::Utc::now().to_rfc3339()),
                                     );
                                 }
                                 trx_set_json(&trx, k, &updated)?;
@@ -361,10 +346,8 @@ where
                     match r {
                         None => Err(FdbBindingError::CustomError("token not found".into())),
                         Some(v) => {
-                            let already_spent = v
-                                .get("spent")
-                                .and_then(|x| x.as_bool())
-                                .unwrap_or(false);
+                            let already_spent =
+                                v.get("spent").and_then(|x| x.as_bool()).unwrap_or(false);
                             if already_spent {
                                 return Err(FdbBindingError::CustomError(
                                     "token already spent".into(),

@@ -107,11 +107,7 @@ impl Default for MockRgb {
 
 #[async_trait]
 impl RgbClient for MockRgb {
-    async fn mint_swap_record(
-        &self,
-        swap_id: &str,
-        payload: &serde_json::Value,
-    ) -> Result<String> {
+    async fn mint_swap_record(&self, swap_id: &str, payload: &serde_json::Value) -> Result<String> {
         self.calls
             .lock()
             .await

@@ -16,12 +16,12 @@ use tracing_subscriber::EnvFilter;
 use webycash_asset_webcash::Webcash;
 use webycash_mining::{MiningConfig, MiningMode};
 use webycash_server_core::{serve, ServeConfig, Server};
+use webycash_storage::dynamodb_backend::DynamoDbStore;
 #[cfg(feature = "fdb")]
 use webycash_storage::fdb_backend::FdbStore;
+use webycash_storage::redis_backend::RedisStore;
 #[cfg(feature = "fdb")]
 use webycash_storage::redis_fdb_backend::RedisFdbStore;
-use webycash_storage::dynamodb_backend::DynamoDbStore;
-use webycash_storage::redis_backend::RedisStore;
 use webycash_storage::WebcashLegacyKeys;
 
 #[tokio::main]

@@ -104,9 +104,8 @@ impl<A: Asset, K: KeyStrategy> DynamoDbStore<A, K> {
                         // create) from connection errors (retry the whole
                         // sequence after a short backoff).
                         if !is_resource_not_found(&e) {
-                            transient_err = Some(anyhow::Error::msg(format!(
-                                "describe_table {name}: {e}"
-                            )));
+                            transient_err =
+                                Some(anyhow::Error::msg(format!("describe_table {name}: {e}")));
                             break;
                         }
                     }
@@ -139,9 +138,8 @@ impl<A: Asset, K: KeyStrategy> DynamoDbStore<A, K> {
                         if is_resource_in_use(&e) {
                             tracing::debug!(table = %name, "table already exists (race)");
                         } else {
-                            transient_err = Some(anyhow::Error::msg(format!(
-                                "create_table {name}: {e}"
-                            )));
+                            transient_err =
+                                Some(anyhow::Error::msg(format!("create_table {name}: {e}")));
                             break;
                         }
                     }
@@ -151,9 +149,12 @@ impl<A: Asset, K: KeyStrategy> DynamoDbStore<A, K> {
                 None => return Ok(()),
                 Some(e) if attempt >= 10 => return Err(e),
                 Some(_) => {
-                    let backoff =
-                        std::time::Duration::from_millis(200u64 * (1 << attempt.min(5)));
-                    tracing::warn!(?attempt, ?backoff, "ensure_tables transient error, retrying");
+                    let backoff = std::time::Duration::from_millis(200u64 * (1 << attempt.min(5)));
+                    tracing::warn!(
+                        ?attempt,
+                        ?backoff,
+                        "ensure_tables transient error, retrying"
+                    );
                     tokio::time::sleep(backoff).await;
                 }
             }
@@ -291,9 +292,7 @@ where
             .iter()
             .map(|h| {
                 let pk = self.keys.token_key(A::NAME, ns, h);
-                by_pk
-                    .get(&pk)
-                    .and_then(|item| Self::item_to_record(item))
+                by_pk.get(&pk).and_then(|item| Self::item_to_record(item))
             })
             .collect())
     }
@@ -340,11 +339,7 @@ where
         out
     }
 
-    async fn batch_burn(
-        &self,
-        ns: &Namespace,
-        ops: &[(String, BurnRecord)],
-    ) -> anyhow::Result<()> {
+    async fn batch_burn(&self, ns: &Namespace, ops: &[(String, BurnRecord)]) -> anyhow::Result<()> {
         for (hash, record) in ops {
             self.exec_burn(ns, hash, record).await?;
         }
@@ -356,10 +351,7 @@ where
             .client
             .get_item()
             .table_name(&self.mining_table)
-            .key(
-                PK,
-                AttributeValue::S(self.keys.mining_state_key(A::NAME)),
-            )
+            .key(PK, AttributeValue::S(self.keys.mining_state_key(A::NAME)))
             .send()
             .await?;
         match result.item {
@@ -379,10 +371,7 @@ where
         self.client
             .put_item()
             .table_name(&self.mining_table)
-            .item(
-                PK,
-                AttributeValue::S(self.keys.mining_state_key(A::NAME)),
-            )
+            .item(PK, AttributeValue::S(self.keys.mining_state_key(A::NAME)))
             .item("data", AttributeValue::S(json))
             .send()
             .await?;
@@ -394,11 +383,7 @@ impl<A: Asset, K: KeyStrategy> DynamoDbStore<A, K>
 where
     A::Record: HashRecord,
 {
-    async fn exec_replace(
-        &self,
-        ns: &Namespace,
-        op: &ReplaceOp<A::Record>,
-    ) -> anyhow::Result<()> {
+    async fn exec_replace(&self, ns: &Namespace, op: &ReplaceOp<A::Record>) -> anyhow::Result<()> {
         let now = chrono::Utc::now().to_rfc3339();
         // Update inputs (SET spent=true, condition spent=false).
         let mut tx_items: Vec<TransactWriteItem> = op
@@ -412,9 +397,7 @@ where
                             .table_name(&self.tokens_table)
                             .key(PK, AttributeValue::S(pk))
                             .update_expression("SET spent = :t, spent_at = :now")
-                            .condition_expression(format!(
-                                "attribute_exists({PK}) AND spent = :f"
-                            ))
+                            .condition_expression(format!("attribute_exists({PK}) AND spent = :f"))
                             .expression_attribute_values(":t", AttributeValue::Bool(true))
                             .expression_attribute_values(":f", AttributeValue::Bool(false))
                             .expression_attribute_values(":now", AttributeValue::S(now.clone()))
@@ -481,9 +464,7 @@ where
                         .table_name(&self.tokens_table)
                         .key(PK, AttributeValue::S(pk))
                         .update_expression("SET spent = :t, spent_at = :now")
-                        .condition_expression(format!(
-                            "attribute_exists({PK}) AND spent = :f"
-                        ))
+                        .condition_expression(format!("attribute_exists({PK}) AND spent = :f"))
                         .expression_attribute_values(":t", AttributeValue::Bool(true))
                         .expression_attribute_values(":f", AttributeValue::Bool(false))
                         .expression_attribute_values(":now", AttributeValue::S(now))
@@ -496,10 +477,7 @@ where
                     aws_sdk_dynamodb::types::Put::builder()
                         .table_name(&self.audit_table)
                         .item(PK, AttributeValue::S(burn_pk))
-                        .item(
-                            "data",
-                            AttributeValue::S(serde_json::to_string(record)?),
-                        )
+                        .item("data", AttributeValue::S(serde_json::to_string(record)?))
                         .build()
                         .expect("put burn audit"),
                 )

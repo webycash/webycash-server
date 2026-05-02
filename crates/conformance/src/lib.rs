@@ -94,8 +94,8 @@ pub mod fixtures {
     pub fn load(stem: &str) -> Result<Fixture, FixtureError> {
         let path = production_dir().join(format!("{stem}.json"));
         let bytes = std::fs::read(&path).map_err(|e| FixtureError::Io(path.clone(), e))?;
-        let fx: Fixture = serde_json::from_slice(&bytes)
-            .map_err(|e| FixtureError::Parse(path, e))?;
+        let fx: Fixture =
+            serde_json::from_slice(&bytes).map_err(|e| FixtureError::Parse(path, e))?;
         Ok(fx)
     }
 
@@ -107,7 +107,9 @@ pub mod fixtures {
         for entry in entries {
             let entry = entry.map_err(|e| FixtureError::Io(dir.clone(), e))?;
             let path = entry.path();
-            let Some(ext) = path.extension() else { continue };
+            let Some(ext) = path.extension() else {
+                continue;
+            };
             if ext != "json" {
                 continue;
             }

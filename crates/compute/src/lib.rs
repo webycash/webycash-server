@@ -163,7 +163,7 @@ mod tests {
             .build()
             .unwrap()
             .block_on(f)
-        }
+    }
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(64))]

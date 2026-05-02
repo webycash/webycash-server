@@ -17,9 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::orchestrator::Orchestrator;
 use crate::error::RefereeError;
-use crate::state::{
-    AliceMusig2Nonces, AlicePayload, BobPayload, Parties, SwapId,
-};
+use crate::state::{AliceMusig2Nonces, AlicePayload, BobPayload, Parties, SwapId};
 
 /// Build the full `/v1` router from a constructed orchestrator.
 pub fn build_router(orch: Arc<Orchestrator>) -> Router {
@@ -87,7 +85,11 @@ async fn audit_for(
     State(orch): State<Arc<Orchestrator>>,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<crate::audit::AuditEntry>>, ApiError> {
-    let entries = orch.audit.entries_for(&SwapId(id)).await.map_err(ApiError)?;
+    let entries = orch
+        .audit
+        .entries_for(&SwapId(id))
+        .await
+        .map_err(ApiError)?;
     Ok(Json(entries))
 }
 

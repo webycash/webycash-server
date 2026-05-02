@@ -133,8 +133,8 @@ impl Identity {
     pub fn verify(pubkey: [u8; 32], tag: Tag, body: &[u8], sig_hex: &str) -> Result<()> {
         let vk = VerifyingKey::from_bytes(&pubkey)
             .map_err(|e| RefereeError::Crypto(format!("pubkey: {e}")))?;
-        let sig_bytes = hex::decode(sig_hex)
-            .map_err(|e| RefereeError::Crypto(format!("sig hex: {e}")))?;
+        let sig_bytes =
+            hex::decode(sig_hex).map_err(|e| RefereeError::Crypto(format!("sig hex: {e}")))?;
         let sig_arr: [u8; 64] = sig_bytes
             .try_into()
             .map_err(|_| RefereeError::Crypto("sig must be 64 bytes".into()))?;
@@ -155,8 +155,7 @@ mod tests {
         let id = Identity::from_secret_bytes([7u8; 32]);
         let body = b"swap=42; outcome=settled";
         let sig = id.sign(Tag::Settled, body);
-        Identity::verify(id.pubkey(), Tag::Settled, body, &sig)
-            .expect("valid sig must verify");
+        Identity::verify(id.pubkey(), Tag::Settled, body, &sig).expect("valid sig must verify");
     }
 
     #[test]
@@ -165,8 +164,7 @@ mod tests {
         let body = b"shared body";
         let sig_settled = id.sign(Tag::Settled, body);
         // Same body, different tag — signature must NOT verify under the wrong tag.
-        let err =
-            Identity::verify(id.pubkey(), Tag::Aborted, body, &sig_settled).unwrap_err();
+        let err = Identity::verify(id.pubkey(), Tag::Aborted, body, &sig_settled).unwrap_err();
         assert!(matches!(err, RefereeError::Crypto(_)));
     }
 
@@ -174,8 +172,7 @@ mod tests {
     fn signature_is_body_specific() {
         let id = Identity::from_secret_bytes([7u8; 32]);
         let sig = id.sign(Tag::Settled, b"body-A");
-        let err =
-            Identity::verify(id.pubkey(), Tag::Settled, b"body-B", &sig).unwrap_err();
+        let err = Identity::verify(id.pubkey(), Tag::Settled, b"body-B", &sig).unwrap_err();
         assert!(matches!(err, RefereeError::Crypto(_)));
     }
 

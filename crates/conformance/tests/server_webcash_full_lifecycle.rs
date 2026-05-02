@@ -233,8 +233,7 @@ fn full_webcash_lifecycle() {
     assert_eq!(parsed["difficulty_target_bits"], 4);
 
     // 2. mine 1.0 webcash via /api/v1/mining_report.
-    let test_secret =
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let test_secret = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let preimage_template = format!(
         r#"{{"webcash":["e1.0:secret:{test_secret}"],"subsidy":["e0.5:secret:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],"timestamp":1714003200,"difficulty":4,"nonce":__NONCE__}}"#
     );
@@ -252,13 +251,13 @@ fn full_webcash_lifecycle() {
     // 3. health_check the mined hash → spent: false.
     let public_hash = sha256_hex(test_secret);
     let hc_body = format!(r#"["e1.0:public:{public_hash}"]"#);
-    let (status, body) = http_post(
-        &format!("http://{bind}/api/v1/health_check"),
-        &hc_body,
-    )
-    .expect("hc1");
+    let (status, body) =
+        http_post(&format!("http://{bind}/api/v1/health_check"), &hc_body).expect("hc1");
     assert_eq!(status, 200, "hc1: {body}");
-    assert!(body.contains(r#""spent": false"#), "hc1 expects unspent: {body}");
+    assert!(
+        body.contains(r#""spent": false"#),
+        "hc1 expects unspent: {body}"
+    );
 
     // 4. /api/v1/replace: 1.0 → 0.4 + 0.6.
     let out1 = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -266,11 +265,8 @@ fn full_webcash_lifecycle() {
     let replace_body = format!(
         r#"{{"webcashes":["e1.0:secret:{test_secret}"],"new_webcashes":["e0.4:secret:{out1}","e0.6:secret:{out2}"],"legalese":{{"terms":true}}}}"#
     );
-    let (status, body) = http_post(
-        &format!("http://{bind}/api/v1/replace"),
-        &replace_body,
-    )
-    .expect("replace");
+    let (status, body) =
+        http_post(&format!("http://{bind}/api/v1/replace"), &replace_body).expect("replace");
     assert_eq!(status, 200, "replace: {body}");
     assert!(body.contains(r#""status": "success""#));
 
@@ -280,11 +276,8 @@ fn full_webcash_lifecycle() {
     let hc2 = format!(
         r#"["e1.0:public:{public_hash}","e0.4:public:{out1_hash}","e0.6:public:{out2_hash}"]"#
     );
-    let (status, body) = http_post(
-        &format!("http://{bind}/api/v1/health_check"),
-        &hc2,
-    )
-    .expect("hc2");
+    let (status, body) =
+        http_post(&format!("http://{bind}/api/v1/health_check"), &hc2).expect("hc2");
     assert_eq!(status, 200);
     // input must be spent, both outputs must be unspent
     assert!(
@@ -307,21 +300,16 @@ fn full_webcash_lifecycle() {
     );
 
     // 6. burn 0.4.
-    let burn_body = format!(
-        r#"{{"webcash":"e0.4:secret:{out1}","legalese":{{"terms":true}}}}"#
-    );
-    let (status, body) = http_post(&format!("http://{bind}/api/v1/burn"), &burn_body)
-        .expect("burn");
+    let burn_body = format!(r#"{{"webcash":"e0.4:secret:{out1}","legalese":{{"terms":true}}}}"#);
+    let (status, body) =
+        http_post(&format!("http://{bind}/api/v1/burn"), &burn_body).expect("burn");
     assert_eq!(status, 200, "burn: {body}");
     assert!(body.contains(r#""status": "success""#));
 
     // 7. health_check after burn: 0.4 spent, 0.6 unspent.
     let hc3 = format!(r#"["e0.4:public:{out1_hash}","e0.6:public:{out2_hash}"]"#);
-    let (status, body) = http_post(
-        &format!("http://{bind}/api/v1/health_check"),
-        &hc3,
-    )
-    .expect("hc3");
+    let (status, body) =
+        http_post(&format!("http://{bind}/api/v1/health_check"), &hc3).expect("hc3");
     assert_eq!(status, 200);
     assert!(
         body.contains(&format!(
@@ -340,8 +328,8 @@ fn full_webcash_lifecycle() {
     let bad_replace = format!(
         r#"{{"webcashes":["e0.6:secret:{out2}"],"new_webcashes":["e0.5:secret:3333333333333333333333333333333333333333333333333333333333333333"],"legalese":{{"terms":true}}}}"#
     );
-    let (status, _body) = http_post(&format!("http://{bind}/api/v1/replace"), &bad_replace)
-        .expect("bad replace");
+    let (status, _body) =
+        http_post(&format!("http://{bind}/api/v1/replace"), &bad_replace).expect("bad replace");
     assert_eq!(status, 500, "amount mismatch must 500");
 
     let _ = child.kill();

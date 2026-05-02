@@ -13,9 +13,7 @@ use std::collections::HashMap;
 use proptest::prelude::*;
 
 use webycash_asset_core::{ContractId, PgpFingerprint};
-use webycash_asset_rgb::{
-    RgbCollectibleRecord, RgbFungibleRecord, RgbOrigin,
-};
+use webycash_asset_rgb::{RgbCollectibleRecord, RgbFungibleRecord, RgbOrigin};
 use webycash_asset_voucher::{VoucherOrigin, VoucherRecord};
 use webycash_asset_webcash::{WebcashOrigin, WebcashRecord};
 use webycash_storage::HashRecord;
@@ -95,7 +93,16 @@ fn arb_rgb_fungible_record() -> impl Strategy<Value = RgbFungibleRecord> {
         arb_fingerprint(),
     )
         .prop_map(
-            |(public_hash, amount_wats, spent, created_at, spent_at, origin, contract_id, issuer_fp)| RgbFungibleRecord {
+            |(
+                public_hash,
+                amount_wats,
+                spent,
+                created_at,
+                spent_at,
+                origin,
+                contract_id,
+                issuer_fp,
+            )| RgbFungibleRecord {
                 public_hash,
                 amount_wats,
                 spent,
@@ -123,15 +130,17 @@ fn arb_rgb_collectible_record() -> impl Strategy<Value = RgbCollectibleRecord> {
         arb_fingerprint(),
     )
         .prop_map(
-            |(public_hash, spent, created_at, spent_at, origin, contract_id, issuer_fp)| RgbCollectibleRecord {
-                public_hash,
-                spent,
-                created_at,
-                spent_at,
-                origin,
-                contract_id,
-                issuer_fp,
-                htlc_state: None,
+            |(public_hash, spent, created_at, spent_at, origin, contract_id, issuer_fp)| {
+                RgbCollectibleRecord {
+                    public_hash,
+                    spent,
+                    created_at,
+                    spent_at,
+                    origin,
+                    contract_id,
+                    issuer_fp,
+                    htlc_state: None,
+                }
             },
         )
 }
@@ -148,7 +157,16 @@ fn arb_voucher_record() -> impl Strategy<Value = VoucherRecord> {
         arb_fingerprint(),
     )
         .prop_map(
-            |(public_hash, amount_wats, spent, created_at, spent_at, origin, contract_id, issuer_fp)| VoucherRecord {
+            |(
+                public_hash,
+                amount_wats,
+                spent,
+                created_at,
+                spent_at,
+                origin,
+                contract_id,
+                issuer_fp,
+            )| VoucherRecord {
                 public_hash,
                 amount_wats,
                 spent,

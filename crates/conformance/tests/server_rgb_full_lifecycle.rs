@@ -39,9 +39,7 @@ fn rgb_fungible_lifecycle_with_namespace_enforcement() {
     let hc1 = harness
         .post(
             "/api/v1/health_check",
-            serde_json::json!([format!(
-                "e100.0:public:{public_hash}:{contract}:{issuer}"
-            )]),
+            serde_json::json!([format!("e100.0:public:{public_hash}:{contract}:{issuer}")]),
         )
         .unwrap();
     assert_eq!(hc1.0, 200);

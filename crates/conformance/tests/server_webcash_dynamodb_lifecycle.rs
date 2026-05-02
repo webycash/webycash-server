@@ -131,10 +131,7 @@ fn run_lifecycle(bind: &str) {
     // health_check after mine
     let (status, body) = http_post(
         &format!("http://{bind}/api/v1/health_check"),
-        &serde_json::to_string(&serde_json::json!([format!(
-            "e1.0:public:{public_hash}"
-        )]))
-        .unwrap(),
+        &serde_json::to_string(&serde_json::json!([format!("e1.0:public:{public_hash}")])).unwrap(),
     )
     .expect("hc1");
     assert_eq!(status, 200);

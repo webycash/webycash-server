@@ -116,8 +116,7 @@ impl LockRequest {
     pub fn stamp_into_state(&self, server_now_unix: u64) -> HtlcState {
         HtlcState {
             committed_h_hex: self.committed_h_hex.clone(),
-            refund_after_unix: server_now_unix
-                .saturating_add(self.refund_after_seconds_from_now),
+            refund_after_unix: server_now_unix.saturating_add(self.refund_after_seconds_from_now),
             claim_owner_hash_hex: sha256_hex_of_ascii(&self.claim_owner_secret_hex),
             refund_owner_hash_hex: sha256_hex_of_ascii(&self.refund_owner_secret_hex),
         }
@@ -141,12 +140,7 @@ mod tests {
     fn for_swap_builds_consistent_owner_hashes() {
         let claim = "a".repeat(64);
         let refund = "b".repeat(64);
-        let s = HtlcState::for_swap(
-            "00".repeat(32),
-            1714003200,
-            &claim,
-            &refund,
-        );
+        let s = HtlcState::for_swap("00".repeat(32), 1714003200, &claim, &refund);
         assert_eq!(s.claim_owner_hash_hex, sha256_hex_of_ascii(&claim));
         assert_eq!(s.refund_owner_hash_hex, sha256_hex_of_ascii(&refund));
         assert_ne!(s.claim_owner_hash_hex, s.refund_owner_hash_hex);
@@ -164,8 +158,14 @@ mod tests {
         let s = req.stamp_into_state(server_now);
         assert_eq!(s.refund_after_unix, server_now + 1800);
         // Owner hashes computed from the request's secrets, not trusted from wallet.
-        assert_eq!(s.claim_owner_hash_hex, sha256_hex_of_ascii(&req.claim_owner_secret_hex));
-        assert_eq!(s.refund_owner_hash_hex, sha256_hex_of_ascii(&req.refund_owner_secret_hex));
+        assert_eq!(
+            s.claim_owner_hash_hex,
+            sha256_hex_of_ascii(&req.claim_owner_secret_hex)
+        );
+        assert_eq!(
+            s.refund_owner_hash_hex,
+            sha256_hex_of_ascii(&req.refund_owner_secret_hex)
+        );
     }
 
     #[test]

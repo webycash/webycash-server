@@ -243,11 +243,7 @@ fn await_tcp(host: &str, port: u16, max: Duration) -> bool {
 fn post(url: &str, body: &str) -> std::io::Result<(u16, String)> {
     post_with_header(url, body, ("X-Test", ""))
 }
-fn post_with_header(
-    url: &str,
-    body: &str,
-    extra: (&str, &str),
-) -> std::io::Result<(u16, String)> {
+fn post_with_header(url: &str, body: &str, extra: (&str, &str)) -> std::io::Result<(u16, String)> {
     let after = url.strip_prefix("http://").unwrap_or(url);
     let (host_port, path) = after
         .split_once('/')

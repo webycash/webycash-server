@@ -41,7 +41,10 @@ mod tests {
         assert!(hex64(&too_short).is_err());
 
         let with_rest = format!("{}:after", "f".repeat(64));
-        assert_eq!(hex64(&with_rest).unwrap().1, "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+        assert_eq!(
+            hex64(&with_rest).unwrap().1,
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        );
     }
 
     use proptest::prelude::*;

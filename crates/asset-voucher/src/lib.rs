@@ -14,9 +14,9 @@ pub use token::{PublicVoucher, SecretVoucher, TokenError};
 use std::collections::HashMap;
 
 use webycash_asset_core::{
-    Amount, Asset, AssetPublic, AssetRecord, AssetSecret, ContractId, IssuedAsset,
-    MintableAsset, PgpFingerprint, RecordBuilder, RecordOrigin, ReplaceHook,
-    Result as AssetResult, SplittableAsset,
+    Amount, Asset, AssetPublic, AssetRecord, AssetSecret, ContractId, IssuedAsset, MintableAsset,
+    PgpFingerprint, RecordBuilder, RecordOrigin, ReplaceHook, Result as AssetResult,
+    SplittableAsset,
 };
 
 /// Origin tag for a voucher record. Vouchers can be minted via PoW (when the
@@ -149,14 +149,12 @@ impl Asset for Voucher {
     type Record = VoucherRecord;
 
     fn parse_secret(s: &str) -> AssetResult<Self::Secret> {
-        SecretVoucher::parse(s).map_err(|e| {
-            webycash_asset_core::AssetError::Parse(format!("voucher secret: {e}"))
-        })
+        SecretVoucher::parse(s)
+            .map_err(|e| webycash_asset_core::AssetError::Parse(format!("voucher secret: {e}")))
     }
     fn parse_public(s: &str) -> AssetResult<Self::Public> {
-        PublicVoucher::parse(s).map_err(|e| {
-            webycash_asset_core::AssetError::Parse(format!("voucher public: {e}"))
-        })
+        PublicVoucher::parse(s)
+            .map_err(|e| webycash_asset_core::AssetError::Parse(format!("voucher public: {e}")))
     }
     fn to_public(secret: &Self::Secret) -> Self::Public {
         secret.to_public()

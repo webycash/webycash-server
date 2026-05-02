@@ -74,7 +74,10 @@ async fn main() -> anyhow::Result<()> {
         musig,
         webcash: Arc::new(MockWebcash::always_unspent()),
         rgb: Arc::new(MockRgb::new()),
-        push: Arc::new(HttpPush::new(config.push_webhook_url.clone(), hmac_key_bytes)),
+        push: Arc::new(HttpPush::new(
+            config.push_webhook_url.clone(),
+            hmac_key_bytes,
+        )),
         audit: Arc::new(InMemoryAuditLog::default()),
         store: Arc::new(InMemoryStore::default()),
         insert_push_retry: config.insert_push_retry,

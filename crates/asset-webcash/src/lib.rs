@@ -21,7 +21,7 @@ use std::collections::HashMap;
 
 use sha2::{Digest, Sha256};
 use webycash_asset_core::{
-    Amount, Asset, AssetRecord, AssetSecret, AssetPublic, MintableAsset, RecordBuilder,
+    Amount, Asset, AssetPublic, AssetRecord, AssetSecret, MintableAsset, RecordBuilder,
     RecordOrigin, ReplaceHook, Result as AssetResult, SplittableAsset,
 };
 
@@ -80,7 +80,10 @@ impl webycash_storage::HashRecord for WebcashRecord {
 
     fn to_fields(&self, fields: &mut HashMap<String, String>) {
         fields.insert("amount_wats".into(), self.amount_wats.to_string());
-        fields.insert("spent".into(), if self.spent { "1".into() } else { "0".into() });
+        fields.insert(
+            "spent".into(),
+            if self.spent { "1".into() } else { "0".into() },
+        );
         fields.insert("created_at".into(), self.created_at.to_rfc3339());
         if let Some(ts) = self.spent_at {
             fields.insert("spent_at".into(), ts.to_rfc3339());
@@ -138,15 +141,13 @@ impl Asset for Webcash {
     type Record = WebcashRecord;
 
     fn parse_secret(s: &str) -> AssetResult<Self::Secret> {
-        SecretWebcash::parse(s).map_err(|e| {
-            webycash_asset_core::AssetError::Parse(format!("webcash secret: {e}"))
-        })
+        SecretWebcash::parse(s)
+            .map_err(|e| webycash_asset_core::AssetError::Parse(format!("webcash secret: {e}")))
     }
 
     fn parse_public(s: &str) -> AssetResult<Self::Public> {
-        PublicWebcash::parse(s).map_err(|e| {
-            webycash_asset_core::AssetError::Parse(format!("webcash public: {e}"))
-        })
+        PublicWebcash::parse(s)
+            .map_err(|e| webycash_asset_core::AssetError::Parse(format!("webcash public: {e}")))
     }
 
     fn to_public(secret: &Self::Secret) -> Self::Public {
@@ -194,8 +195,7 @@ impl MintableAsset for Webcash {
     /// SHA256(preimage) must have ≥ `difficulty_target_bits` leading
     /// zero bits. Pure function — no I/O, no side effects.
     fn verify_issuance(ctx: &Self::IssuanceContext) -> AssetResult<()> {
-        if leading_zero_bits(&Sha256::digest(ctx.preimage.as_bytes()))
-            >= ctx.difficulty_target_bits
+        if leading_zero_bits(&Sha256::digest(ctx.preimage.as_bytes())) >= ctx.difficulty_target_bits
         {
             Ok(())
         } else {
@@ -212,9 +212,8 @@ impl MintableAsset for Webcash {
     /// necessary — server-core's handler does that before invoking
     /// the trait).
     fn build_records(ctx: &Self::IssuanceContext) -> AssetResult<Vec<Self::Record>> {
-        let pre: MiningPreimageJson = serde_json::from_str(&ctx.preimage).map_err(|e| {
-            webycash_asset_core::AssetError::Parse(format!("preimage JSON: {e}"))
-        })?;
+        let pre: MiningPreimageJson = serde_json::from_str(&ctx.preimage)
+            .map_err(|e| webycash_asset_core::AssetError::Parse(format!("preimage JSON: {e}")))?;
 
         let mut records = Vec::with_capacity(pre.webcash.len() + pre.subsidy.len());
         for token in pre.webcash.iter().chain(pre.subsidy.iter()) {

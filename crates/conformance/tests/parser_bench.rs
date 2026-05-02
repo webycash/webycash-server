@@ -29,30 +29,16 @@ fn report(name: &str, elapsed_ns: u128) {
     } else {
         1_000_000_000 / ns_per_op
     };
-    println!(
-        "{name:>32}: {ns_per_op:>6} ns/op  ({ops_per_sec:>9} ops/s, {ITERATIONS} iters)",
-    );
+    println!("{name:>32}: {ns_per_op:>6} ns/op  ({ops_per_sec:>9} ops/s, {ITERATIONS} iters)",);
 }
 
 #[test]
 #[ignore = "throughput micro-bench; run with --ignored --nocapture"]
 fn bench_parsers_release() {
-    let webcash_token = format!(
-        "e1.0:secret:{}",
-        "a".repeat(64),
-    );
-    let rgb_fungible_token = format!(
-        "e10.0:secret:{}:rgb20-usdc:{FP}",
-        "b".repeat(64),
-    );
-    let rgb_collectible_token = format!(
-        "secret:{}:rgb21-art:{FP}",
-        "c".repeat(64),
-    );
-    let voucher_token = format!(
-        "e25.0:secret:{}:credits-q1:{FP}",
-        "d".repeat(64),
-    );
+    let webcash_token = format!("e1.0:secret:{}", "a".repeat(64),);
+    let rgb_fungible_token = format!("e10.0:secret:{}:rgb20-usdc:{FP}", "b".repeat(64),);
+    let rgb_collectible_token = format!("secret:{}:rgb21-art:{FP}", "c".repeat(64),);
+    let voucher_token = format!("e25.0:secret:{}:credits-q1:{FP}", "d".repeat(64),);
 
     let bench = |name: &str, parse: &dyn Fn() -> bool| {
         let t0 = Instant::now();

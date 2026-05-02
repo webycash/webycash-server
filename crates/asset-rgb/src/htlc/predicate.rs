@@ -102,8 +102,7 @@ pub fn evaluate(
 ) -> Result<PredicateResult, PredicateError> {
     // Try the claim path first when a preimage is provided.
     if let Some(x_hex) = &witness.provided_x_hex {
-        let _ = hex::decode(x_hex)
-            .map_err(|e| PredicateError::BadPreimageHex(format!("{e}")))?;
+        let _ = hex::decode(x_hex).map_err(|e| PredicateError::BadPreimageHex(format!("{e}")))?;
 
         // Hash the ASCII bytes of the hex form, matching the system-wide
         // secret-hashing convention.

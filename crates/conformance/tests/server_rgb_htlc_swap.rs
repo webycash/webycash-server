@@ -109,14 +109,23 @@ fn htlc_lock_and_claim_with_correct_preimage() {
         .post(
             "/api/v1/health_check",
             serde_json::json!([
-                format!("e1.0:public:{}:{contract}:{ISSUER}", sha256_hex(&locked_secret)),
+                format!(
+                    "e1.0:public:{}:{contract}:{ISSUER}",
+                    sha256_hex(&locked_secret)
+                ),
                 format!("e1.0:public:{}:{contract}:{ISSUER}", sha256_hex(&bob_final)),
             ]),
         )
         .expect("hc");
     assert_eq!(status, 200);
-    assert!(body.contains(r#""spent": true"#), "locked must be spent: {body}");
-    assert!(body.contains(r#""spent": false"#), "claim output must be unspent: {body}");
+    assert!(
+        body.contains(r#""spent": true"#),
+        "locked must be spent: {body}"
+    );
+    assert!(
+        body.contains(r#""spent": false"#),
+        "claim output must be unspent: {body}"
+    );
 }
 
 #[test]

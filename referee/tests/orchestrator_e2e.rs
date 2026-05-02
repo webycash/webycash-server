@@ -87,7 +87,11 @@ struct Harness {
     identity: Arc<Identity>,
 }
 
-fn harness_with(verifier: Arc<dyn referee::zkp::Verifier>, webcash: Arc<dyn referee::clients::WebcashClient>, retries: u8) -> Harness {
+fn harness_with(
+    verifier: Arc<dyn referee::zkp::Verifier>,
+    webcash: Arc<dyn referee::clients::WebcashClient>,
+    retries: u8,
+) -> Harness {
     let identity = Arc::new(Identity::from_secret_bytes([7; 32]));
     let push = Arc::new(MockPush::new());
     let audit = Arc::new(InMemoryAuditLog::default());

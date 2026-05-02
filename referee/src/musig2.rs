@@ -66,11 +66,7 @@ pub trait Musig2Signer: Send + Sync + 'static {
     /// Begin a session for `swap_id` × `session`. Returns the referee's
     /// public nonce; the secret nonce is held internally keyed by
     /// `(swap_id, session)`.
-    async fn begin_session(
-        &self,
-        swap_id: &SwapId,
-        session: Session,
-    ) -> Result<PubNonce>;
+    async fn begin_session(&self, swap_id: &SwapId, session: Session) -> Result<PubNonce>;
 
     /// Produce the referee's partial-sig for `(swap_id, session)`,
     /// against `tx_hash` (canonical hash of the transaction being
@@ -126,11 +122,7 @@ impl Musig2Signer for MockSigner {
         self.pubshare.clone()
     }
 
-    async fn begin_session(
-        &self,
-        swap_id: &SwapId,
-        session: Session,
-    ) -> Result<PubNonce> {
+    async fn begin_session(&self, swap_id: &SwapId, session: Session) -> Result<PubNonce> {
         let mut g = self.sessions.lock().expect("sessions lock");
         let key = (swap_id.0.clone(), session);
         if !g.insert(key) {

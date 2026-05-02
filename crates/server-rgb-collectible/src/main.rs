@@ -19,12 +19,12 @@ use webycash_asset_rgb::RgbCollectible;
 use webycash_auth::IssuerRegistry;
 use webycash_mining::{MiningConfig, MiningMode};
 use webycash_server_core::{serve_collectible, ServeConfig, Server};
+use webycash_storage::dynamodb_backend::DynamoDbStore;
 #[cfg(feature = "fdb")]
 use webycash_storage::fdb_backend::FdbStore;
+use webycash_storage::redis_backend::RedisStore;
 #[cfg(feature = "fdb")]
 use webycash_storage::redis_fdb_backend::RedisFdbStore;
-use webycash_storage::dynamodb_backend::DynamoDbStore;
-use webycash_storage::redis_backend::RedisStore;
 use webycash_storage::NamespacedKeys;
 
 #[tokio::main]
@@ -104,23 +104,25 @@ async fn main() -> anyhow::Result<()> {
 
     match db_backend.as_str() {
         "redis" => {
-            let redis_url = std::env::var("REDIS_URL")
-                .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+            let redis_url =
+                std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
             let store = RedisStore::<RgbCollectible, _>::new(&redis_url, NamespacedKeys)
                 .await
                 .with_context(|| format!("connecting to Redis at {redis_url}"))?;
             finish!(store)
         }
         "dynamodb" => {
-            let aws_config =
-                aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
+            let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
             let mut sdk_builder = aws_sdk_dynamodb::config::Builder::from(&aws_config);
             if let Ok(endpoint) = std::env::var("DYNAMODB_ENDPOINT") {
                 sdk_builder = sdk_builder.endpoint_url(endpoint);
             }
             let client = aws_sdk_dynamodb::Client::from_conf(sdk_builder.build());
             let store = DynamoDbStore::<RgbCollectible, _>::new(client, NamespacedKeys);
-            store.ensure_tables().await.context("ensure_tables on DynamoDB")?;
+            store
+                .ensure_tables()
+                .await
+                .context("ensure_tables on DynamoDB")?;
             finish!(store)
         }
         #[cfg(feature = "fdb")]
@@ -136,8 +138,8 @@ async fn main() -> anyhow::Result<()> {
         "redis_fdb" => {
             let network = unsafe { ::foundationdb::boot() };
             std::mem::forget(network);
-            let redis_url = std::env::var("REDIS_URL")
-                .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+            let redis_url =
+                std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
             let cluster_file = std::env::var("FDB_CLUSTER_FILE").ok();
             let store = RedisFdbStore::<RgbCollectible, _>::new(
                 &redis_url,

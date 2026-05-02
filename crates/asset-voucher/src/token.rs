@@ -205,11 +205,7 @@ mod tests {
 
     #[test]
     fn roundtrip_secret() {
-        let token = format!(
-            "e10.0:secret:{}:credits-q1:{}",
-            "f".repeat(64),
-            FP
-        );
+        let token = format!("e10.0:secret:{}:credits-q1:{}", "f".repeat(64), FP);
         let v = SecretVoucher::parse(&token).expect("parse");
         assert_eq!(v.amount.to_string(), "10.00000000");
         assert_eq!(v.secret, "f".repeat(64));
@@ -224,11 +220,7 @@ mod tests {
 
     #[test]
     fn to_public_hash_is_sha256_of_secret_hex() {
-        let secret = format!(
-            "e1.0:secret:{}:credits:{}",
-            "a".repeat(64),
-            FP
-        );
+        let secret = format!("e1.0:secret:{}:credits:{}", "a".repeat(64), FP);
         let s = SecretVoucher::parse(&secret).unwrap();
         let p = s.to_public();
         let expected = hex::encode(Sha256::digest("a".repeat(64).as_bytes()));

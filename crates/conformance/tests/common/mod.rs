@@ -88,7 +88,11 @@ impl TestHarness {
 
     pub fn post(&self, path: &str, body: serde_json::Value) -> std::io::Result<(u16, String)> {
         let body = serde_json::to_string(&body).unwrap();
-        http_send(&format!("http://{}{}", self.bind, path), "POST", Some(&body))
+        http_send(
+            &format!("http://{}{}", self.bind, path),
+            "POST",
+            Some(&body),
+        )
     }
 
     #[allow(dead_code)]
@@ -167,11 +171,7 @@ fn leading_zero_bits(hash: &[u8]) -> u32 {
         + full_zero_bytes * 8
 }
 
-fn http_send(
-    url: &str,
-    method: &str,
-    body: Option<&str>,
-) -> std::io::Result<(u16, String)> {
+fn http_send(url: &str, method: &str, body: Option<&str>) -> std::io::Result<(u16, String)> {
     let after_scheme = url.strip_prefix("http://").unwrap_or(url);
     let (host_port, path) = after_scheme
         .split_once('/')

@@ -112,7 +112,8 @@ fn bench_one(name: &str, port: u16, body: &str) {
 #[test]
 #[ignore = "requires compose; run with --ignored --nocapture"]
 fn throughput_health_check_per_flavor() {
-    let webcash_body = r#"["e1.0:public:0000000000000000000000000000000000000000000000000000000000000000"]"#;
+    let webcash_body =
+        r#"["e1.0:public:0000000000000000000000000000000000000000000000000000000000000000"]"#;
     let rgb_body = r#"["e10.0:public:0000000000000000000000000000000000000000000000000000000000000000:rgb20-bench:aabbccddeeff00112233445566778899aabbccdd"]"#;
     let voucher_body = r#"["e25.0:public:0000000000000000000000000000000000000000000000000000000000000000:credits-bench:aabbccddeeff00112233445566778899aabbccdd"]"#;
 

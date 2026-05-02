@@ -50,7 +50,7 @@ members = [
 [workspace.package]
 version = "0.3.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.91"
 license = "MIT"
 authors = ["Webycash Developers"]
 repository = "https://github.com/webycash/webycash-server"
