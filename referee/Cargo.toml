@@ -1,0 +1,85 @@
+[package]
+name = "referee"
+description = "Webcash ↔ Bitcoin ARK swap helper. ZKP-verified, MuSig2-cosigned, non-custodial. See webycash-server/docs/referee-zkp-based-swap.md §4 and webycash-server/referee/docs/."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "referee"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+# When enabled, plugs in a real Groth16 verifier (arkworks-backed). Off
+# by default so M-1.B build matrix stays fast; toggling on is the M-4
+# verification step.
+zkp-arkworks = ["dep:ark-groth16", "dep:ark-bn254", "dep:ark-serialize", "dep:ark-ec"]
+# When enabled, plugs in real MuSig2 (musig2 crate) for the referee's
+# partial-sig generation. Off by default for the same reason.
+musig2-real = ["dep:musig2", "dep:secp256k1"]
+# Real Postgres store. Off by default; enables sqlx and a Postgres pool.
+postgres = ["dep:sqlx"]
+
+[dependencies]
+# Asset-side types we share with the rest of webycash-server.
+webycash-asset-rgb = { workspace = true }
+webycash-asset-core = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# HTTP — Axum is the chosen framework (small + typed)
+axum = "0.7"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
+
+# HTTP client (push webhook caller, RGB-server / Webcash client wraps)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Crypto
+sha2 = { workspace = true }
+hex = { workspace = true }
+base64 = { workspace = true }
+ed25519-dalek = { workspace = true }
+hmac = { workspace = true }
+rand = { workspace = true }
+
+# Optional ZKP backend (M-4 gate)
+ark-groth16 = { version = "0.5", optional = true }
+ark-bn254 = { version = "0.5", optional = true }
+ark-serialize = { version = "0.5", optional = true }
+ark-ec = { version = "0.5", optional = true }
+
+# Optional MuSig2 backend
+musig2 = { version = "0.2", optional = true }
+secp256k1 = { version = "0.29", optional = true, features = ["rand"] }
+
+# Optional Postgres store (production deployments)
+sqlx = { version = "0.8", optional = true, default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "uuid", "chrono", "json"] }
+
+# IDs + timestamps
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Errors
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }

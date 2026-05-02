@@ -15,8 +15,8 @@ use std::collections::HashMap;
 
 use webycash_asset_core::{
     Amount, Asset, AssetPublic, AssetRecord, AssetSecret, ContractId, IssuedAsset,
-    MintableAsset, PgpFingerprint, RecordBuilder, RecordOrigin, Result as AssetResult,
-    SplittableAsset,
+    MintableAsset, PgpFingerprint, RecordBuilder, RecordOrigin, ReplaceHook,
+    Result as AssetResult, SplittableAsset,
 };
 
 /// Origin tag for a voucher record. Vouchers can be minted via PoW (when the
@@ -162,6 +162,12 @@ impl Asset for Voucher {
         secret.to_public()
     }
 }
+
+/// Voucher servers stay non-conditional by design: vouchers are bearer
+/// credits whose semantics do not include preimage / timeout / signature
+/// gates. The replace hook is the default no-op accept, matching the
+/// constraint in `docs/referee-zkp-based-swap.md` §3.
+impl ReplaceHook for Voucher {}
 
 impl SplittableAsset for Voucher {
     fn amount(secret: &Self::Secret) -> Amount {

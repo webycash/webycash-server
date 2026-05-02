@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use sha2::{Digest, Sha256};
 use webycash_asset_core::{
     Amount, Asset, AssetRecord, AssetSecret, AssetPublic, MintableAsset, RecordBuilder,
-    RecordOrigin, Result as AssetResult, SplittableAsset,
+    RecordOrigin, ReplaceHook, Result as AssetResult, SplittableAsset,
 };
 
 /// In-DB record for a Webcash token. Mirrors the legacy
@@ -162,6 +162,12 @@ impl SplittableAsset for Webcash {
         public.amount
     }
 }
+
+/// Webcash is the canonical non-conditional asset: the server has no hook
+/// to enforce time-locks, preimages, or any predicate beyond conservation
+/// + namespace. The replace hook stays at its default no-op accept; the
+/// `webcash.org` protocol freeze guarantees this cannot change.
+impl ReplaceHook for Webcash {}
 
 /// Bridge from a parsed `SecretWebcash` to a `WebcashRecord`. Used by the
 /// /replace and /mining_report handlers to construct ledger entries.

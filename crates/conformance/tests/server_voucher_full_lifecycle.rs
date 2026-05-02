@@ -79,14 +79,14 @@ fn voucher_lifecycle_with_namespace_enforcement() {
     assert_eq!(hc2.0, 200);
     assert!(
         hc2.1.contains(&format!(
-            r#""e10:public:{public_hash}:{contract}:{issuer}": {{"spent": true}}"#
+            r#""e10:public:{public_hash}:{contract}:{issuer}": {{"spent": true, "amount": null}}"#
         )),
         "hc2 input: {}",
         hc2.1
     );
     assert!(
         hc2.1.contains(&format!(
-            r#""e3:public:{out1_hash}:{contract}:{issuer}": {{"spent": false}}"#
+            r#""e3:public:{out1_hash}:{contract}:{issuer}": {{"spent": false, "amount": "3"}}"#
         )),
         "hc2 out1: {}",
         hc2.1
@@ -134,14 +134,14 @@ fn voucher_lifecycle_with_namespace_enforcement() {
     assert_eq!(hc3.0, 200);
     assert!(
         hc3.1.contains(&format!(
-            r#""e3:public:{out1_hash}:{contract}:{issuer}": {{"spent": true}}"#
+            r#""e3:public:{out1_hash}:{contract}:{issuer}": {{"spent": true, "amount": null}}"#
         )),
         "hc3 burn: {}",
         hc3.1
     );
     assert!(
         hc3.1.contains(&format!(
-            r#""e7:public:{out2_hash}:{contract}:{issuer}": {{"spent": false}}"#
+            r#""e7:public:{out2_hash}:{contract}:{issuer}": {{"spent": false, "amount": "7"}}"#
         )),
         "hc3 unspent: {}",
         hc3.1

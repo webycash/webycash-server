@@ -4,6 +4,39 @@ All notable changes to `webycash-server` are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.3.0] — 2026-05-02
+
+The `refactor/asset-traits` branch landed. Five binaries from one
+workspace; referee swap helper added; HTLC primitive ships on RGB20
+and RGB21; full conformance suite green against docker-spawned
+servers.
+
+### Added
+- **`referee` crate** — Webcash↔Bitcoin ARK swap helper, ZKP-verified
+  and MuSig2-cosigned. Typestate `SwapState<P>` with pure transitions;
+  signed append-only audit log; `start_swap` background-spawns
+  orchestration so `/v1/swap/initiate` returns the swap id immediately.
+  Refuses to boot with mock crypto unless `REFEREE_ALLOW_MOCK_CRYPTO=1`.
+  Production builds with `--features zkp-arkworks,musig2-real,postgres`.
+- **HTLC on `RgbCollectible` (RGB21)** — same machinery as RGB20.
+  5-test conformance suite (`server_rgb21_htlc.rs`).
+- **`webycash-server/docs/`** — full-stack production deployment guide
+  (`deployment.md`), referee-zkp-based-swap protocol spec
+  (`referee-zkp-based-swap.md`), and roadmap (`roadmap.md`) with
+  honest two-column ship-now vs gated-on framing.
+- **CI overhaul** — lint + property + conformance (docker-spawned
+  servers) + cross-platform release builds for all five binaries.
+
+### Changed
+- Banned phrase **"atomic swap"** removed everywhere; cross-rail flows
+  now use specific names: *referee-ZKP-based swap*, *HTLC swap*, *HTLC
+  + bearer-race swap*.
+- Workspace `default-members = ["crates/server-webcash"]` — the
+  default `cargo build` produces the webcash binary only; `rgb`,
+  `rgb-collectible`, `voucher`, and `referee` are opt-in via `-p`.
+- Push webhook signing replaced hand-rolled HMAC-SHA256 with the
+  audited RustCrypto `hmac` crate.
+
 ## [Unreleased] — `refactor/asset-traits` branch
 
 Asset-gated server family: one workspace, four binaries

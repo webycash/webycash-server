@@ -10,9 +10,11 @@ repository.workspace = true
 
 [features]
 default = []
-# Enable real rgb-core/aluvm integration. Off by default until upstream API
-# settles; flip on for a deployment that needs full AluVM transition checks.
-rgb-runtime = ["dep:aluvm", "dep:strict_types"]
+# Enable real rgb-core/rgb-std/strict-types integration (full schema
+# authoring with bytecode-resident predicates). v1 ships the HTLC
+# schema as a Rust predicate gated through AluVM; this feature reserves
+# the slot for v2.
+rgb-runtime = ["dep:strict_types"]
 
 [dependencies]
 webycash-asset-core = { workspace = true }
@@ -20,14 +22,16 @@ webycash-proto = { workspace = true }
 webycash-storage = { workspace = true }
 webycash-aluvm-runtime = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 nom = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
-# Real RGB ecosystem (gated by `rgb-runtime` feature). Enable to wire
-# validate_transfer + verify_issuance into rgb-core/aluvm. Compilation
-# may fail on certain platforms (notably WASM) due to upstream C deps;
-# the WASM viability gate stays a follow-up milestone.
-aluvm = { version = "0.12", optional = true }
+# AluVM is on by default — the HTLC schema in `htlc/` runs the
+# minimal accept/reject script through it on every `/replace` of an
+# HTLC-locked output. See docs/referee-zkp-based-swap.md.
+aluvm = "0.12"
+# Strict-types-encoded state-and-witness schema lands when the v2
+# bytecode-resident contract replaces the v1 Rust predicate.
 strict_types = { version = "2.9", optional = true }

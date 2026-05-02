@@ -288,15 +288,21 @@ fn full_webcash_lifecycle() {
     assert_eq!(status, 200);
     // input must be spent, both outputs must be unspent
     assert!(
-        body.contains(&format!(r#""e1:public:{public_hash}": {{"spent": true}}"#)),
+        body.contains(&format!(
+            r#""e1:public:{public_hash}": {{"spent": true, "amount": null}}"#
+        )),
         "hc2 input: {body}"
     );
     assert!(
-        body.contains(&format!(r#""e0.4:public:{out1_hash}": {{"spent": false}}"#)),
+        body.contains(&format!(
+            r#""e0.4:public:{out1_hash}": {{"spent": false, "amount": "0.4"}}"#
+        )),
         "hc2 out1: {body}"
     );
     assert!(
-        body.contains(&format!(r#""e0.6:public:{out2_hash}": {{"spent": false}}"#)),
+        body.contains(&format!(
+            r#""e0.6:public:{out2_hash}": {{"spent": false, "amount": "0.6"}}"#
+        )),
         "hc2 out2: {body}"
     );
 
@@ -318,11 +324,15 @@ fn full_webcash_lifecycle() {
     .expect("hc3");
     assert_eq!(status, 200);
     assert!(
-        body.contains(&format!(r#""e0.4:public:{out1_hash}": {{"spent": true}}"#)),
+        body.contains(&format!(
+            r#""e0.4:public:{out1_hash}": {{"spent": true, "amount": null}}"#
+        )),
         "hc3 out1: {body}"
     );
     assert!(
-        body.contains(&format!(r#""e0.6:public:{out2_hash}": {{"spent": false}}"#)),
+        body.contains(&format!(
+            r#""e0.6:public:{out2_hash}": {{"spent": false, "amount": "0.6"}}"#
+        )),
         "hc3 out2: {body}"
     );
 

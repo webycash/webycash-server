@@ -1,0 +1,44 @@
+{
+  "captured_at": "2026-04-30T18:00:00Z",
+  "request": {
+    "method": "POST",
+    "url": "https://webcash.org/api/v1/health_check",
+    "headers": {
+      "User-Agent": "webycash-conformance-harness/0.1",
+      "Content-Type": "application/json"
+    },
+    "body_raw": "[\"e1.0:public:<known-unspent-hash>\",\"e1.0:public:<known-spent-hash>\"]"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "text/html; charset=UTF-8",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "x-requested-with",
+      "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+      "Strict-Transport-Security": "max-age=15768000"
+    },
+    "body_raw": "{\"status\": \"success\", \"results\": {\"e1:public:<known-unspent-hash>\": {\"spent\": false, \"amount\": \"1\"}, \"e1:public:<known-spent-hash>\": {\"spent\": true, \"amount\": null}}}",
+    "body_parsed": {
+      "status": "success",
+      "results": {
+        "e1:public:<known-unspent-hash>": {
+          "spent": false,
+          "amount": "1"
+        },
+        "e1:public:<known-spent-hash>": {
+          "spent": true,
+          "amount": null
+        }
+      }
+    }
+  },
+  "notes": [
+    "Companion to post_health_check_unknown.json — documents the response shape when the production server has the token in its DB.",
+    "Schematic fixture (placeholder hashes): production is read-only from outside, so we cannot mint a known unspent token to capture a real byte stream. The shape is documented in webylib/docs/PROTOCOL.md and used by the wallet's recover() — without an `amount` field on `spent: false`, recovery silently drops funds.",
+    "spent: false → amount: \"<decimal>\"   (unspent; wallet recovers this value)",
+    "spent: true  → amount: null            (spent; no amount returned)",
+    "spent: null  → no amount key           (unknown; per post_health_check_unknown.json)",
+    "Decimal stringification matches /api/v1/target: trailing zeros stripped (`1`, not `1.00000000`)."
+  ]
+}

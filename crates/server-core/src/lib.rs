@@ -125,7 +125,7 @@ impl<A: Asset, S: LedgerStore<A>> Server<A, S> {
 /// `A: IssuedAsset` (enforced by the `serve_issued` overload).
 pub async fn serve<A, S>(server: Server<A, S>) -> anyhow::Result<()>
 where
-    A: Asset + MintableAsset + SplittableAsset + RecordBuilder,
+    A: Asset + MintableAsset + SplittableAsset + RecordBuilder + webycash_asset_core::ReplaceHook,
     A::Record: HashRecord,
     S: LedgerStore<A>,
 {
@@ -156,7 +156,12 @@ where
 /// otherwise the handler returns 503.
 pub async fn serve_issued<A, S>(server: Server<A, S>) -> anyhow::Result<()>
 where
-    A: Asset + MintableAsset + SplittableAsset + RecordBuilder + IssuedAsset,
+    A: Asset
+        + MintableAsset
+        + SplittableAsset
+        + RecordBuilder
+        + IssuedAsset
+        + webycash_asset_core::ReplaceHook,
     A::Record: HashRecord,
     S: LedgerStore<A>,
 {
@@ -186,7 +191,12 @@ async fn route_issued<A, S>(
     req: Request<Incoming>,
 ) -> Response<Full<Bytes>>
 where
-    A: Asset + MintableAsset + SplittableAsset + RecordBuilder + IssuedAsset,
+    A: Asset
+        + MintableAsset
+        + SplittableAsset
+        + RecordBuilder
+        + IssuedAsset
+        + webycash_asset_core::ReplaceHook,
     A::Record: HashRecord,
     S: LedgerStore<A>,
 {
@@ -212,7 +222,12 @@ where
 /// be PoW-mined; issuance is operator-signed only.
 pub async fn serve_collectible<A, S>(server: Server<A, S>) -> anyhow::Result<()>
 where
-    A: Asset + MintableAsset + TransferableAsset + IssuedAsset + CollectibleRecordBuilder,
+    A: Asset
+        + MintableAsset
+        + TransferableAsset
+        + IssuedAsset
+        + CollectibleRecordBuilder
+        + webycash_asset_core::ReplaceHook,
     A::Record: HashRecord,
     S: LedgerStore<A>,
 {
@@ -243,7 +258,12 @@ async fn route_collectible<A, S>(
     req: Request<Incoming>,
 ) -> Response<Full<Bytes>>
 where
-    A: Asset + MintableAsset + TransferableAsset + IssuedAsset + CollectibleRecordBuilder,
+    A: Asset
+        + MintableAsset
+        + TransferableAsset
+        + IssuedAsset
+        + CollectibleRecordBuilder
+        + webycash_asset_core::ReplaceHook,
     A::Record: HashRecord,
     S: LedgerStore<A>,
 {
@@ -271,7 +291,7 @@ where
 
 async fn route<A, S>(state: &Server<A, S>, req: Request<Incoming>) -> Response<Full<Bytes>>
 where
-    A: Asset + MintableAsset + SplittableAsset + RecordBuilder,
+    A: Asset + MintableAsset + SplittableAsset + RecordBuilder + webycash_asset_core::ReplaceHook,
     A::Record: HashRecord,
     S: LedgerStore<A>,
 {
@@ -453,8 +473,21 @@ mod handlers {
         // unscoped namespace. For RGB/Voucher, each token carries its own
         // (contract_id, issuer_fp); we group lookups by namespace so a
         // single health_check can span multiple compartments.
-        let mut lookups: Vec<(String, Option<bool>)> = Vec::with_capacity(hashes.len());
-        // Build (index, namespace, hash) triples then bucket by namespace.
+        //
+        // We use `get_tokens` (full record) rather than `check_tokens` so the
+        // response can carry `amount` for known tokens — matching the
+        // production webcash.org contract documented in
+        // `webylib/docs/PROTOCOL.md`:
+        //
+        //   spent: false → amount: "<decimal>"   (unspent)
+        //   spent: true  → amount: null          (spent)
+        //   unknown      → no amount field at all
+        //
+        // The recovery path on the wallet relies on the `amount` field for
+        // unspent tokens; without it, a recovered wallet has no way to know
+        // the stored value of a derived secret.
+        let mut lookups: Vec<(String, Option<bool>, Option<i64>)> =
+            vec![(String::new(), None, None); hashes.len()];
         type IndexedHash = (usize, String);
         let mut by_ns: std::collections::HashMap<Namespace, Vec<IndexedHash>> =
             std::collections::HashMap::new();
@@ -467,16 +500,29 @@ mod handlers {
             };
             by_ns.entry(ns).or_default().push((idx, hash.clone()));
         }
-        // Resolve per-bucket; reorder back to input order.
-        lookups.resize(hashes.len(), (String::new(), None));
         for (ns, items) in by_ns {
             let bucket_hashes: Vec<String> = items.iter().map(|(_, h)| h.clone()).collect();
-            let res = match state.store.check_tokens(&ns, &bucket_hashes).await {
+            // Records carry both spent state and amount. Spent state lives on
+            // the record (HashRecord::spent / via to_fields → "spent" field
+            // round-tripped at storage layer); for the public health_check we
+            // only need amount + a separate spent probe. Backends generally
+            // store spent as a flag inside the record HASH; the simpler API
+            // is `get_tokens` for amount + `check_tokens` for spent. Issue
+            // both — get_tokens cost is dominated by network RTT which is
+            // shared with check_tokens on most backends.
+            let amounts = match state.store.get_tokens(&ns, &bucket_hashes).await {
                 Ok(r) => r,
                 Err(e) => return server_error(&format!("storage: {e}")),
             };
-            for ((orig_idx, _), (h, spent)) in items.into_iter().zip(res) {
-                lookups[orig_idx] = (h, spent);
+            let spents = match state.store.check_tokens(&ns, &bucket_hashes).await {
+                Ok(r) => r,
+                Err(e) => return server_error(&format!("storage: {e}")),
+            };
+            for ((orig_idx, _), ((h, spent), record)) in
+                items.into_iter().zip(spents.into_iter().zip(amounts))
+            {
+                let amount_wats = record.as_ref().map(|r| r.amount_wats());
+                lookups[orig_idx] = (h, spent, amount_wats);
             }
         }
 
@@ -487,7 +533,7 @@ mod handlers {
         // build also preserves the Python `json.dumps` two-space style.
         let mut body = String::with_capacity(64 + canonical.len() * 100);
         body.push_str(r#"{"status": "success", "results": {"#);
-        for (i, ((_, spent), key)) in lookups.iter().zip(canonical.iter()).enumerate() {
+        for (i, ((_, spent, amount), key)) in lookups.iter().zip(canonical.iter()).enumerate() {
             if i > 0 {
                 body.push_str(", ");
             }
@@ -506,6 +552,18 @@ mod handlers {
                 None => body.push_str("null"),
                 Some(true) => body.push_str("true"),
                 Some(false) => body.push_str("false"),
+            }
+            // Amount field: present iff the token is known. Unspent tokens
+            // carry the stored amount; spent tokens carry null. See
+            // webylib/docs/PROTOCOL.md.
+            match (spent, amount) {
+                (Some(false), Some(wats)) => {
+                    body.push_str(r#", "amount": ""#);
+                    body.push_str(&wats_to_string(*wats));
+                    body.push('"');
+                }
+                (Some(true), _) => body.push_str(r#", "amount": null"#),
+                _ => {}
             }
             body.push('}');
         }
@@ -530,7 +588,7 @@ mod handlers {
         req: Request<Incoming>,
     ) -> Response<Full<Bytes>>
     where
-        A: Asset + SplittableAsset + RecordBuilder,
+        A: Asset + SplittableAsset + RecordBuilder + webycash_asset_core::ReplaceHook,
         A::Record: HashRecord,
         S: LedgerStore<A>,
     {
@@ -629,11 +687,53 @@ mod handlers {
             }
         }
 
+        // Server's authoritative clock at the moment of the request.
+        // Used for HTLC predicate evaluation + lock-stamp; the wallet
+        // has no input. See docs/referee-zkp-based-swap.md §8.
+        let server_now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        // Asset-specific replace hook (default no-op for Webcash + Voucher;
+        // RGB runs HTLC predicate evaluation here). Fetch input records
+        // first so the hook can inspect their `htlc_state`.
+        let input_records_full = match state.store.get_tokens(&ns, &input_hashes).await {
+            Ok(rs) => rs,
+            Err(e) => return server_error(&format!("storage: {e}")),
+        };
+        // Every input must exist in the store (else the replace would
+        // fail at batch_replace anyway; we surface a clearer 422 here).
+        let mut concrete_inputs: Vec<A::Record> =
+            Vec::with_capacity(input_records_full.len());
+        for (i, rec) in input_records_full.into_iter().enumerate() {
+            match rec {
+                Some(r) => concrete_inputs.push(r),
+                None => {
+                    return server_error(&format!(
+                        "input token not found: {}",
+                        input_hashes[i]
+                    ));
+                }
+            }
+        }
+        if let Err(e) = A::validate_replace_request(
+            &body,
+            &concrete_inputs,
+            &output_secrets,
+            server_now_unix,
+        ) {
+            return server_error(&format!("{e}"));
+        }
+
         // Build the replace op: outputs become Replaced records.
-        let outputs: Vec<A::Record> = output_secrets
+        let mut outputs: Vec<A::Record> = output_secrets
             .iter()
             .map(|s| A::record_from_secret(s, RecordOrigin::Replaced))
             .collect();
+        if let Err(e) = A::augment_output_records(&body, &mut outputs, server_now_unix) {
+            return server_error(&format!("{e}"));
+        }
         let output_hashes: Vec<String> =
             outputs.iter().map(|r| r.public_hash().to_string()).collect();
         let record = ReplacementRecord {
@@ -1000,10 +1100,17 @@ mod handlers {
         req: Request<Incoming>,
     ) -> Response<Full<Bytes>>
     where
-        A: Asset + TransferableAsset + CollectibleRecordBuilder + IssuedAsset,
+        A: Asset
+            + TransferableAsset
+            + CollectibleRecordBuilder
+            + IssuedAsset
+            + webycash_asset_core::ReplaceHook,
         A::Record: HashRecord,
         S: LedgerStore<A>,
     {
+        // Pass-through: the hook reads `htlc_locks` and `htlc_witnesses`
+        // off the raw body, so we don't need to deserialize them here.
+        // Same shape as the splittable `replace<A,S>` flow.
         #[derive(serde::Deserialize)]
         struct ReplaceBody {
             #[serde(default)]
@@ -1059,8 +1166,47 @@ mod handlers {
         };
         let public = A::to_public(&input);
         let input_hash = public.public_hash().to_string();
-        let output_record =
+
+        // Server's authoritative clock at the moment of the request —
+        // used by the HTLC predicate evaluator (refund-after-timeout
+        // path). Wallet's timestamp is ignored. See
+        // docs/referee-zkp-based-swap.md §8.
+        let server_now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        // Asset-specific replace hook. For RgbCollectible this runs the
+        // HTLC predicate evaluator on any HTLC-locked input — claim path
+        // requires preimage + correct claim-owner; refund path requires
+        // timeout + correct refund-owner. The hook reads the raw body to
+        // extract `htlc_witnesses`/`htlc_locks` slots.
+        let input_records_full =
+            match state.store.get_tokens(&ns, &[input_hash.clone()]).await {
+                Ok(rs) => rs,
+                Err(e) => return server_error(&format!("storage: {e}")),
+            };
+        let concrete_inputs: Vec<A::Record> = match input_records_full.into_iter().next() {
+            Some(Some(r)) => vec![r],
+            _ => return server_error(&format!("input token not found: {input_hash}")),
+        };
+        if let Err(e) = A::validate_replace_request(
+            &body,
+            &concrete_inputs,
+            std::slice::from_ref(&output),
+            server_now_unix,
+        ) {
+            return server_error(&format!("{e}"));
+        }
+
+        let mut output_record =
             <A as CollectibleRecordBuilder>::record_from_secret(&output, RecordOrigin::Replaced);
+        // Stamp HTLC lock state onto the output if `htlc_locks` is present
+        // — same shape as the fungible flow.
+        let mut outputs_slice = std::slice::from_mut(&mut output_record);
+        if let Err(e) = A::augment_output_records(&body, &mut outputs_slice, server_now_unix) {
+            return server_error(&format!("{e}"));
+        }
         let output_hash = output_record.public_hash().to_string();
         let record = ReplacementRecord {
             id: uuid::Uuid::new_v4().to_string(),

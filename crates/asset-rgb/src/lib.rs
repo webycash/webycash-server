@@ -20,8 +20,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod htlc;
 mod token;
 
+pub use htlc::{execute_predicate, HtlcState, HtlcWitness, PredicateError, PredicateResult};
 pub use token::{
     PublicCollectible, PublicFungible, SecretCollectible, SecretFungible, TokenError,
 };
@@ -29,9 +31,9 @@ pub use token::{
 use std::collections::HashMap;
 
 use webycash_asset_core::{
-    Amount, Asset, AssetPublic, AssetRecord, AssetSecret, CollectibleRecordBuilder, ContractId,
-    IssuedAsset, MintableAsset, PgpFingerprint, RecordBuilder, RecordOrigin,
-    Result as AssetResult, SplittableAsset, TransferableAsset,
+    Amount, Asset, AssetError, AssetPublic, AssetRecord, AssetSecret, CollectibleRecordBuilder,
+    ContractId, IssuedAsset, MintableAsset, PgpFingerprint, RecordBuilder, RecordOrigin,
+    ReplaceHook, Result as AssetResult, SplittableAsset, TransferableAsset,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -82,6 +84,12 @@ pub struct RgbFungibleRecord {
     pub contract_id: ContractId,
     /// Issuer's PGP V4 fingerprint.
     pub issuer_fp: PgpFingerprint,
+    /// HTLC lock state, when this output is in the swap-locked state.
+    /// `None` for plain (unlocked) tokens. Stamped by the server at
+    /// lock time; readable by every subsequent `/replace` that targets
+    /// this output's hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub htlc_state: Option<htlc::HtlcState>,
 }
 
 impl AssetRecord for RgbFungibleRecord {}
@@ -117,6 +125,12 @@ impl webycash_storage::HashRecord for RgbFungibleRecord {
         );
         fields.insert("contract_id".into(), self.contract_id.0.clone());
         fields.insert("issuer_fp".into(), self.issuer_fp.0.clone());
+        if let Some(s) = &self.htlc_state {
+            fields.insert(
+                "htlc_state".into(),
+                serde_json::to_string(s).expect("HtlcState always serialises"),
+            );
+        }
     }
     fn from_fields(public_hash: &str, fields: &HashMap<String, String>) -> Option<Self> {
         Some(RgbFungibleRecord {
@@ -143,16 +157,26 @@ impl webycash_storage::HashRecord for RgbFungibleRecord {
             },
             contract_id: ContractId(fields.get("contract_id")?.clone()),
             issuer_fp: PgpFingerprint(fields.get("issuer_fp")?.clone()),
+            htlc_state: fields
+                .get("htlc_state")
+                .and_then(|s| serde_json::from_str(s).ok()),
         })
     }
 }
 
-/// In-DB record for an RGB21 collectible (NFT). Same shape as
-/// `RgbFungibleRecord` minus the `amount_wats` field — collectibles
-/// are non-splittable, so a per-token unit is conceptually 1.
-/// `HashRecord::amount_wats` returns 0 for collectibles, keeping the
-/// HASH layout uniform with fungible records (one Lua script handles
-/// both flavors).
+/// In-DB record for an RGB21 collectible (RGB-native non-fungible record).
+/// Same shape as `RgbFungibleRecord` minus the `amount_wats` field —
+/// collectibles are non-splittable, so a per-token unit is conceptually 1.
+/// `HashRecord::amount_wats` returns 0 for collectibles, keeping the HASH
+/// layout uniform with fungible records (one Lua script handles both
+/// flavors).
+///
+/// Like the fungible flavor, an RGB21 record can carry HTLC lock state.
+/// When `htlc_state` is set, every subsequent `/replace` of this record
+/// must satisfy the HTLC predicate (`htlc::execute_predicate`) — claim
+/// path requires the preimage + correct claim-owner, refund path requires
+/// timeout + correct refund-owner. Used by the HTLC swap (RGB ↔ ARK / RGB
+/// ↔ Webcash / RGB ↔ Voucher) per `docs/referee-zkp-based-swap.md` §7.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RgbCollectibleRecord {
     /// Token public hash — primary key within its namespace.
@@ -169,6 +193,11 @@ pub struct RgbCollectibleRecord {
     pub contract_id: ContractId,
     /// Issuer's PGP V4 fingerprint.
     pub issuer_fp: PgpFingerprint,
+    /// HTLC lock state, when this collectible is in the swap-locked
+    /// state. `None` for plain (unlocked) records. Stamped by the server
+    /// at lock time; readable by every subsequent `/replace`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub htlc_state: Option<htlc::HtlcState>,
 }
 
 impl AssetRecord for RgbCollectibleRecord {}
@@ -208,6 +237,12 @@ impl webycash_storage::HashRecord for RgbCollectibleRecord {
         );
         fields.insert("contract_id".into(), self.contract_id.0.clone());
         fields.insert("issuer_fp".into(), self.issuer_fp.0.clone());
+        if let Some(s) = &self.htlc_state {
+            fields.insert(
+                "htlc_state".into(),
+                serde_json::to_string(s).expect("HtlcState always serialises"),
+            );
+        }
     }
     fn from_fields(public_hash: &str, fields: &HashMap<String, String>) -> Option<Self> {
         Some(RgbCollectibleRecord {
@@ -233,6 +268,9 @@ impl webycash_storage::HashRecord for RgbCollectibleRecord {
             },
             contract_id: ContractId(fields.get("contract_id")?.clone()),
             issuer_fp: PgpFingerprint(fields.get("issuer_fp")?.clone()),
+            htlc_state: fields
+                .get("htlc_state")
+                .and_then(|s| serde_json::from_str(s).ok()),
         })
     }
 }
@@ -364,6 +402,7 @@ impl RecordBuilder for RgbFungible {
             },
             contract_id: secret.contract_id.clone(),
             issuer_fp: secret.issuer_fp.clone(),
+            htlc_state: None,
         }
     }
 
@@ -391,6 +430,116 @@ impl AssetPublic for PublicFungible {
     fn public_hash(&self) -> &str {
         &self.hash
     }
+}
+
+/// HTLC integration for RGB20.
+///
+/// Wire shape on the `/replace` body — additive to the existing
+/// `{webcashes, new_webcashes, legalese}` envelope:
+///
+/// ```json
+/// {
+///   "webcashes": [...],
+///   "new_webcashes": [...],
+///   "legalese": {"terms": true},
+///   "htlc_witnesses": [
+///     {"input_index": 0,
+///      "witness": {"provided_x_hex": "<hex>", "output_owner_hash_hex": "<hex>"}}
+///   ],
+///   "htlc_locks": [
+///     {"output_index": 1,
+///      "request": {
+///        "committed_h_hex": "<hex(sha256(X))>",
+///        "refund_after_seconds_from_now": 1800,
+///        "claim_owner_secret_hex": "<recipient secret>",
+///        "refund_owner_secret_hex": "<sender refund secret>"
+///      }}
+///   ]
+/// }
+/// ```
+///
+/// `htlc_witnesses` is consulted when an INPUT is HTLC-locked (the
+/// stored record carries `htlc_state`). Each entry pairs an input index
+/// with its preimage-or-refund witness; the predicate runs through
+/// `htlc::execute_predicate` with the server's clock; failure rejects
+/// the whole replace.
+///
+/// `htlc_locks` marks OUTPUTS as HTLC-locked. The server stamps
+/// `state.refund_after_unix = server_now + delta` from the request's
+/// delta, then writes the resulting `HtlcState` onto the output record.
+impl ReplaceHook for RgbFungible {
+    fn validate_replace_request(
+        request_body: &[u8],
+        input_records: &[Self::Record],
+        _output_secrets: &[Self::Secret],
+        server_now_unix: u64,
+    ) -> AssetResult<()> {
+        let witnesses = parse_htlc_witnesses(request_body)?;
+        for (idx, rec) in input_records.iter().enumerate() {
+            let Some(state) = &rec.htlc_state else {
+                continue;
+            };
+            let Some(entry) = witnesses.iter().find(|w| w.input_index == idx) else {
+                return Err(AssetError::Invariant(format!(
+                    "htlc: input {idx} is HTLC-locked but no htlc_witnesses entry was supplied"
+                )));
+            };
+            htlc::execute_predicate(state, &entry.witness, server_now_unix)
+                .map_err(|e| AssetError::Invariant(format!("htlc input {idx}: {e}")))?;
+        }
+        Ok(())
+    }
+
+    fn augment_output_records(
+        request_body: &[u8],
+        output_records: &mut [Self::Record],
+        server_now_unix: u64,
+    ) -> AssetResult<()> {
+        let locks = parse_htlc_locks(request_body)?;
+        let total_outputs = output_records.len();
+        for entry in locks {
+            let idx = entry.output_index;
+            let rec = output_records.get_mut(idx).ok_or_else(|| {
+                AssetError::Invariant(format!(
+                    "htlc: htlc_locks references output_index {idx} but only {total_outputs} outputs"
+                ))
+            })?;
+            rec.htlc_state = Some(entry.request.stamp_into_state(server_now_unix));
+        }
+        Ok(())
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct HtlcWitnessEntry {
+    input_index: usize,
+    witness: htlc::HtlcWitness,
+}
+
+#[derive(serde::Deserialize)]
+struct HtlcLockEntry {
+    output_index: usize,
+    request: htlc::LockRequest,
+}
+
+fn parse_htlc_witnesses(body: &[u8]) -> AssetResult<Vec<HtlcWitnessEntry>> {
+    let v: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|e| AssetError::Parse(format!("htlc: request body: {e}")))?;
+    let Some(arr) = v.get("htlc_witnesses") else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_value(arr.clone())
+        .map_err(|e| AssetError::Parse(format!("htlc_witnesses: {e}")))
+}
+
+fn parse_htlc_locks(body: &[u8]) -> AssetResult<Vec<HtlcLockEntry>> {
+    let v: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|e| AssetError::Parse(format!("htlc: request body: {e}")))?;
+    let Some(arr) = v.get("htlc_locks") else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_value(arr.clone())
+        .map_err(|e| AssetError::Parse(format!("htlc_locks: {e}")))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -423,6 +572,56 @@ impl Asset for RgbCollectible {
 }
 
 // RGB21 implements TransferableAsset, NOT SplittableAsset.
+/// HTLC integration for RGB21 collectibles. Same wire shape as the
+/// fungible flavor (`htlc_witnesses` on inputs, `htlc_locks` on outputs)
+/// — the predicate primitive is asset-agnostic.
+///
+/// Used by the HTLC swap flows in `docs/referee-zkp-based-swap.md` §7
+/// when a collectible (e.g. a Harmoniis-issued License) is one leg of
+/// a cross-rail swap with Bitcoin ARK / Webcash / Voucher.
+impl ReplaceHook for RgbCollectible {
+    fn validate_replace_request(
+        request_body: &[u8],
+        input_records: &[Self::Record],
+        _output_secrets: &[Self::Secret],
+        server_now_unix: u64,
+    ) -> AssetResult<()> {
+        let witnesses = parse_htlc_witnesses(request_body)?;
+        for (idx, rec) in input_records.iter().enumerate() {
+            let Some(state) = &rec.htlc_state else {
+                continue;
+            };
+            let Some(entry) = witnesses.iter().find(|w| w.input_index == idx) else {
+                return Err(AssetError::Invariant(format!(
+                    "htlc: input {idx} is HTLC-locked but no htlc_witnesses entry was supplied"
+                )));
+            };
+            htlc::execute_predicate(state, &entry.witness, server_now_unix)
+                .map_err(|e| AssetError::Invariant(format!("htlc input {idx}: {e}")))?;
+        }
+        Ok(())
+    }
+
+    fn augment_output_records(
+        request_body: &[u8],
+        output_records: &mut [Self::Record],
+        server_now_unix: u64,
+    ) -> AssetResult<()> {
+        let locks = parse_htlc_locks(request_body)?;
+        let total_outputs = output_records.len();
+        for entry in locks {
+            let idx = entry.output_index;
+            let rec = output_records.get_mut(idx).ok_or_else(|| {
+                AssetError::Invariant(format!(
+                    "htlc: htlc_locks references output_index {idx} but only {total_outputs} outputs"
+                ))
+            })?;
+            rec.htlc_state = Some(entry.request.stamp_into_state(server_now_unix));
+        }
+        Ok(())
+    }
+}
+
 impl TransferableAsset for RgbCollectible {
     /// Pre-flight check before submitting an RGB21 1:1 transfer. Pins
     /// the namespace invariant — input and output must carry the same
@@ -491,6 +690,7 @@ impl CollectibleRecordBuilder for RgbCollectible {
             },
             contract_id: secret.contract_id.clone(),
             issuer_fp: secret.issuer_fp.clone(),
+            htlc_state: None,
         }
     }
 
@@ -580,6 +780,7 @@ mod tests {
             origin: RgbOrigin::Issued,
             contract_id: ContractId(contract.into()),
             issuer_fp: issuer,
+            htlc_state: None,
         }
     }
 

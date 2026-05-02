@@ -158,13 +158,13 @@ fn run_voucher_lifecycle(bind: &str) {
     .unwrap();
     assert!(
         body.contains(&format!(
-            r#""e10:public:{public_hash}:{contract}:{issuer}": {{"spent": true}}"#
+            r#""e10:public:{public_hash}:{contract}:{issuer}": {{"spent": true, "amount": null}}"#
         )),
         "input not spent: {body}"
     );
     assert!(
         body.contains(&format!(
-            r#""e3:public:{out1h}:{contract}:{issuer}": {{"spent": false}}"#
+            r#""e3:public:{out1h}:{contract}:{issuer}": {{"spent": false, "amount": "3"}}"#
         )),
         "out1 not unspent: {body}"
     );

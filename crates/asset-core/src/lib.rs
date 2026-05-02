@@ -229,6 +229,52 @@ pub trait IssuedAsset: Asset {
     fn contract_id_public(public: &Self::Public) -> &ContractId;
 }
 
+/// Hook for asset-specific `/replace` validation that goes beyond the generic
+/// conservation + namespace checks `server-core` already runs.
+///
+/// Default impl is a no-op accept (Webcash and Voucher use it that way —
+/// their servers are non-conditional by design and treat `/replace` as a
+/// pure single-use-seal closure). RGB-flavor assets override the methods
+/// to plug in HTLC predicate execution: see `webycash-asset-rgb::htlc`.
+///
+/// The trait is intentionally narrow:
+///
+/// - `validate_replace_request` runs BEFORE the ledger commits, gets full
+///   request bytes (so it can pull asset-specific extras like
+///   `htlc_witnesses` from the JSON), the input records as the server
+///   read them from storage, and the output secrets the wallet sent.
+///   On `Err(_)`, the server rejects the entire batched replace.
+/// - `augment_output_records` runs AFTER record construction but BEFORE
+///   the ledger insert. RGB uses it to stamp `htlc_state` onto outputs
+///   that the request marked as HTLC-locked.
+///
+/// `server_now_unix` is the server's authoritative clock at the moment of
+/// the request — not anything the wallet supplied.
+pub trait ReplaceHook: Asset {
+    /// Pre-commit validation. Default: accept everything.
+    #[allow(unused_variables)]
+    fn validate_replace_request(
+        request_body: &[u8],
+        input_records: &[Self::Record],
+        output_secrets: &[Self::Secret],
+        server_now_unix: u64,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Mutate freshly-built output records before they're written to the
+    /// ledger. Default: leave them untouched. RGB uses this to stamp
+    /// HTLC lock state onto outputs the request flagged for locking.
+    #[allow(unused_variables)]
+    fn augment_output_records(
+        request_body: &[u8],
+        output_records: &mut [Self::Record],
+        server_now_unix: u64,
+    ) -> Result<()> {
+        Ok(())
+    }
+}
+
 /// Configuration for the mining/issuance gate.
 ///
 /// Concrete fields (mode, target_secs, etc.) live in `webycash-mining`;

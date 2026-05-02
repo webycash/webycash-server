@@ -104,6 +104,10 @@ fn arb_rgb_fungible_record() -> impl Strategy<Value = RgbFungibleRecord> {
                 origin,
                 contract_id,
                 issuer_fp,
+                // Codec round-trip property covers plain (unlocked) records;
+                // HTLC-locked round-trips have dedicated coverage in
+                // server_rgb_htlc_swap.rs and server_rgb21_htlc.rs.
+                htlc_state: None,
             },
         )
 }
@@ -127,6 +131,7 @@ fn arb_rgb_collectible_record() -> impl Strategy<Value = RgbCollectibleRecord> {
                 origin,
                 contract_id,
                 issuer_fp,
+                htlc_state: None,
             },
         )
 }

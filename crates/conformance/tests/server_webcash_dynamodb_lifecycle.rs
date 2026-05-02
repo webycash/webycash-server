@@ -174,13 +174,13 @@ fn run_lifecycle(bind: &str) {
     assert_eq!(status, 200);
     assert!(
         body.contains(&format!(
-            r#""e1:public:{public_hash}": {{"spent": true}}"#
+            r#""e1:public:{public_hash}": {{"spent": true, "amount": null}}"#
         )),
         "hc2 input: {body}"
     );
     assert!(
         body.contains(&format!(
-            r#""e0.4:public:{out1_hash}": {{"spent": false}}"#
+            r#""e0.4:public:{out1_hash}": {{"spent": false, "amount": "0.4"}}"#
         )),
         "hc2 out1: {body}"
     );
@@ -209,7 +209,7 @@ fn run_lifecycle(bind: &str) {
     assert_eq!(status, 200);
     assert!(
         body.contains(&format!(
-            r#""e0.4:public:{out1_hash}": {{"spent": true}}"#
+            r#""e0.4:public:{out1_hash}": {{"spent": true, "amount": null}}"#
         )),
         "hc3 burn: {body}"
     );

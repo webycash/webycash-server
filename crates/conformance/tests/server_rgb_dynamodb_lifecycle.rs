@@ -150,13 +150,13 @@ fn run_rgb_lifecycle(bind: &str) {
     .unwrap();
     assert!(
         body.contains(&format!(
-            r#""e100:public:{public_hash}:{contract}:{issuer}": {{"spent": true}}"#
+            r#""e100:public:{public_hash}:{contract}:{issuer}": {{"spent": true, "amount": null}}"#
         )),
         "input not spent: {body}"
     );
     assert!(
         body.contains(&format!(
-            r#""e25:public:{out1h}:{contract}:{issuer}": {{"spent": false}}"#
+            r#""e25:public:{out1h}:{contract}:{issuer}": {{"spent": false, "amount": "25"}}"#
         )),
         "out1 not unspent: {body}"
     );
