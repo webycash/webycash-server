@@ -55,7 +55,7 @@ mod sealed {
 macro_rules! phase {
     ($name:ident, $tag:literal) => {
         /// See [`super`] for the phase graph.
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
         pub struct $name;
         impl sealed::Sealed for $name {}
         impl Phase for $name {
@@ -72,3 +72,4 @@ phase!(Settled, "settled");
 phase!(Aborted, "aborted");
 phase!(Invalidated, "invalidated");
 phase!(Refunded, "refunded");
+phase!(Canceled, "canceled");

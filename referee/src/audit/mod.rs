@@ -34,6 +34,13 @@ use crate::error::Result;
 use crate::sign::Identity;
 use crate::state::{tag_for_phase, SwapId};
 
+#[cfg(feature = "dynamodb")]
+pub mod dynamodb;
+#[cfg(feature = "fdb")]
+pub mod fdb;
+#[cfg(feature = "redis")]
+pub mod redis;
+
 /// One audit log entry. Append-only: never modified after signing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEntry {
@@ -98,8 +105,8 @@ pub trait AuditLog: Send + Sync + 'static {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// In-memory append-only log. Suitable for dev + tests; production
-/// deployments should use a Postgres-backed implementation that survives
-/// restarts.
+/// deployments use one of the cfg-gated backends (Redis, DynamoDB,
+/// FoundationDB) that survives restarts.
 #[derive(Default)]
 pub struct InMemoryAuditLog {
     entries: tokio::sync::RwLock<Vec<AuditEntry>>,

@@ -122,6 +122,13 @@ pub struct Parties {
     /// hex). The referee uses its own share + this to construct the
     /// 2-of-2 aggregated key.
     pub alice_musig2_pubkey: Secp256k1Pubkey,
+    /// Bob's Ed25519 cancel pubkey (hex, 32 bytes). Authenticates
+    /// `POST /v1/swap/{id}/cancel` from Bob's side. Independent of
+    /// Bob's PGP key so a wallet can sign without unlocking PGP.
+    pub bob_cancel_pubkey_hex: String,
+    /// Alice's Ed25519 cancel pubkey (hex, 32 bytes). See
+    /// [`Self::bob_cancel_pubkey_hex`].
+    pub alice_cancel_pubkey_hex: String,
 }
 
 /// Bob's ZKP-verified ciphertext: the webcash secret encrypted to
@@ -260,6 +267,7 @@ pub fn tag_for_phase(name: &str) -> Tag {
         "aborted" => Tag::Aborted,
         "invalidated" => Tag::Invalidated,
         "refunded" => Tag::Refunded,
+        "canceled" => Tag::Canceled,
         _ => Tag::AuditTip,
     }
 }

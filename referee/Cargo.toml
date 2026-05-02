@@ -17,15 +17,17 @@ path = "src/lib.rs"
 
 [features]
 default = []
-# When enabled, plugs in a real Groth16 verifier (arkworks-backed). Off
-# by default so M-1.B build matrix stays fast; toggling on is the M-4
-# verification step.
-zkp-arkworks = ["dep:ark-groth16", "dep:ark-bn254", "dep:ark-serialize", "dep:ark-ec"]
-# When enabled, plugs in real MuSig2 (musig2 crate) for the referee's
-# partial-sig generation. Off by default for the same reason.
+# Real Groth16 verifier (arkworks BN254). Off by default so the build
+# matrix stays fast; toggling on enables the production verifier.
+zkp-arkworks = ["dep:ark-groth16", "dep:ark-bn254", "dep:ark-serialize", "dep:ark-ec", "dep:ark-ff"]
+# Real MuSig2 signer over secp256k1 (BIP327 via the `musig2` crate).
 musig2-real = ["dep:musig2", "dep:secp256k1"]
-# Real Postgres store. Off by default; enables sqlx and a Postgres pool.
-postgres = ["dep:sqlx"]
+# Storage backends. Mirror the asset-server pattern (Redis /
+# DynamoDB / FoundationDB) so the referee can be deployed against the
+# same data layer as the rest of the stack.
+redis = ["dep:redis"]
+dynamodb = ["dep:aws-config", "dep:aws-sdk-dynamodb"]
+fdb = ["dep:foundationdb"]
 
 [dependencies]
 # Asset-side types we share with the rest of webycash-server.
@@ -56,18 +58,22 @@ ed25519-dalek = { workspace = true }
 hmac = { workspace = true }
 rand = { workspace = true }
 
-# Optional ZKP backend (M-4 gate)
+# Optional ZKP backend
 ark-groth16 = { version = "0.5", optional = true }
 ark-bn254 = { version = "0.5", optional = true }
 ark-serialize = { version = "0.5", optional = true }
 ark-ec = { version = "0.5", optional = true }
+ark-ff = { version = "0.5", optional = true }
 
-# Optional MuSig2 backend
-musig2 = { version = "0.2", optional = true }
-secp256k1 = { version = "0.29", optional = true, features = ["rand"] }
+# Optional MuSig2 backend (BIP327)
+musig2 = { version = "0.2", optional = true, features = ["secp256k1"] }
+secp256k1 = { version = "0.30", optional = true, features = ["rand", "global-context"] }
 
-# Optional Postgres store (production deployments)
-sqlx = { version = "0.8", optional = true, default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "uuid", "chrono", "json"] }
+# Optional storage backends — match the asset-server matrix.
+redis = { workspace = true, optional = true }
+aws-config = { workspace = true, optional = true }
+aws-sdk-dynamodb = { workspace = true, optional = true }
+foundationdb = { workspace = true, optional = true }
 
 # IDs + timestamps
 uuid = { workspace = true }

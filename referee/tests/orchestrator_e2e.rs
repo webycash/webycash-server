@@ -26,7 +26,7 @@ use referee::push::{MockPush, PushKind};
 use referee::sign::{Identity, Tag};
 use referee::state::{
     tag_for_phase, AliceMusig2Nonces, AlicePayload, ArkOutpointHash, BobPayload, Groth16Proof,
-    Parties, PgpEncrypted, PgpFingerprint, Secp256k1Pubkey, SwapId, WebcashPublicHash,
+    Parties, PgpEncrypted, PgpFingerprint, Secp256k1Pubkey, WebcashPublicHash,
 };
 use referee::store::{InMemoryStore, SwapStore};
 use referee::zkp::MockVerifier;
@@ -42,6 +42,8 @@ fn parties() -> Parties {
         alice_pgp_fp: PgpFingerprint("aa".repeat(20)),
         alice_pgp_pubkey_hex: "ff".repeat(64),
         alice_musig2_pubkey: Secp256k1Pubkey(format!("02{}", "11".repeat(32))),
+        bob_cancel_pubkey_hex: "11".repeat(32),
+        alice_cancel_pubkey_hex: "22".repeat(32),
     }
 }
 
@@ -108,6 +110,7 @@ fn harness_with(
         push: push.clone(),
         audit: audit.clone(),
         store: store.clone(),
+        swap_max_age_secs: 86_400,
         insert_push_retry: retries,
         // Tests run with no backoff so the post-check loop iterates as
         // fast as the mocks return; production sets this from
@@ -125,9 +128,10 @@ fn harness_with(
     }
 }
 
-/// Drive `run_swap` with a freshly-generated id (the same way `start_swap`
-/// would). Tests use this directly to keep the flow synchronous and
-/// inspect outcomes without polling.
+/// Drive `start_swap` + repeated `advance_swap` to terminal. Tests
+/// use this directly so assertions can inspect every push, audit
+/// entry, and store row deterministically — production (Lambda)
+/// splits the same flow across multiple invocations.
 async fn run_swap(
     h: &Harness,
     parties: Parties,
@@ -135,8 +139,7 @@ async fn run_swap(
     alice: AlicePayload,
     nonces: AliceMusig2Nonces,
 ) -> Result<SwapOutcome, RefereeError> {
-    let id = SwapId::fresh();
-    h.orch.run_swap(id, parties, bob, alice, nonces).await
+    h.orch.run_to_completion(parties, bob, alice, nonces).await
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -331,7 +334,9 @@ async fn store_reflects_terminal_phase_on_settled_path() {
         panic!("expected settled");
     };
     let row = h.store.get(&swap_id).await.unwrap().expect("row exists");
-    assert_eq!(row.state.phase, "settled");
+    assert_eq!(row.phase, "settled");
+    assert!(row.terminal);
+    assert_eq!(row.status, referee::transaction::TransactionStatus::Settled);
 }
 
 #[tokio::test]
@@ -348,5 +353,10 @@ async fn store_reflects_terminal_phase_on_refunded_path() {
         panic!("expected refunded");
     };
     let row = h.store.get(&swap_id).await.unwrap().expect("row exists");
-    assert_eq!(row.state.phase, "refunded");
+    assert_eq!(row.phase, "refunded");
+    assert!(row.terminal);
+    assert_eq!(
+        row.status,
+        referee::transaction::TransactionStatus::Refunded
+    );
 }

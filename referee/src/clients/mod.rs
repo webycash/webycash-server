@@ -40,12 +40,72 @@ pub trait WebcashClient: Send + Sync + 'static {
     async fn check(&self, hash: &WebcashPublicHash) -> Result<SpentStatus>;
 }
 
+/// Parameters for the timeout-bound HTLC backup record minted at
+/// initiate. See `docs/transaction-model.md` §HTLC backup refund.
+#[derive(Debug, Clone)]
+pub struct HtlcRefundParams {
+    /// `created_at_unix + Config::swap_max_age_secs` — after this,
+    /// Alice can release the record unilaterally with `R_alice`.
+    pub timeout_unix: u64,
+    /// `sha256(R_alice)` — Alice's refund-secret commitment supplied
+    /// at initiate (independent of the webcash secret).
+    pub refund_unlock_hash_hex: String,
+    /// Bob's PGP fingerprint, recorded for audit.
+    pub bob_pgp_fp: String,
+    /// Alice's PGP fingerprint, recorded for audit.
+    pub alice_pgp_fp: String,
+}
+
+/// What outcome the referee is closing the HTLC record with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HtlcCloseKind {
+    /// Settlement succeeded; archive without releasing the refund
+    /// branch.
+    Settle,
+    /// Refund-via-MuSig2 succeeded; archive without releasing the
+    /// refund branch.
+    Refund,
+    /// Swap was canceled by a party; archive without releasing the
+    /// refund branch.
+    Cancel,
+}
+
 /// Pluggable client for the RGB server.
 #[async_trait]
 pub trait RgbClient: Send + Sync + 'static {
     /// Mint the swap-tracking RGB21 record. Returns the record's
     /// stable id (contract id of the record on our RGB server).
     async fn mint_swap_record(&self, swap_id: &str, payload: &serde_json::Value) -> Result<String>;
+
+    /// Mint a timeout-bound HTLC record alongside the swap-tracking
+    /// record. Provides Alice an evidentiary unilateral-refund branch
+    /// in case the referee disappears mid-swap; see
+    /// `docs/transaction-model.md` §HTLC backup refund.
+    ///
+    /// Returns the contract id of the minted record, stored on the
+    /// `Transaction` row as `htlc_refund_contract_id`.
+    ///
+    /// Default implementation returns `Ok(None)` so backends that
+    /// don't yet have HTLC support don't block the swap.
+    async fn mint_htlc_refund(
+        &self,
+        _swap_id: &str,
+        _params: &HtlcRefundParams,
+    ) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    /// Close the HTLC record minted by [`Self::mint_htlc_refund`].
+    /// Default no-op so backends that didn't mint can be silent on
+    /// close.
+    async fn close_htlc_refund(
+        &self,
+        _swap_id: &str,
+        _contract_id: &str,
+        _kind: HtlcCloseKind,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -86,8 +146,12 @@ impl WebcashClient for MockWebcash {
 
 /// Mock RGB client. Records every call and returns deterministic ids.
 pub struct MockRgb {
-    /// Calls seen.
+    /// `mint_swap_record` calls.
     pub calls: tokio::sync::Mutex<Vec<(String, serde_json::Value)>>,
+    /// `mint_htlc_refund` calls.
+    pub htlc_mints: tokio::sync::Mutex<Vec<(String, HtlcRefundParams)>>,
+    /// `close_htlc_refund` calls.
+    pub htlc_closes: tokio::sync::Mutex<Vec<(String, String, HtlcCloseKind)>>,
 }
 
 impl MockRgb {
@@ -101,6 +165,8 @@ impl Default for MockRgb {
     fn default() -> Self {
         Self {
             calls: Default::default(),
+            htlc_mints: Default::default(),
+            htlc_closes: Default::default(),
         }
     }
 }
@@ -113,6 +179,31 @@ impl RgbClient for MockRgb {
             .await
             .push((swap_id.into(), payload.clone()));
         Ok(format!("rgb-record-{swap_id}"))
+    }
+
+    async fn mint_htlc_refund(
+        &self,
+        swap_id: &str,
+        params: &HtlcRefundParams,
+    ) -> Result<Option<String>> {
+        self.htlc_mints
+            .lock()
+            .await
+            .push((swap_id.into(), params.clone()));
+        Ok(Some(format!("rgb-htlc-{swap_id}")))
+    }
+
+    async fn close_htlc_refund(
+        &self,
+        swap_id: &str,
+        contract_id: &str,
+        kind: HtlcCloseKind,
+    ) -> Result<()> {
+        self.htlc_closes
+            .lock()
+            .await
+            .push((swap_id.into(), contract_id.into(), kind));
+        Ok(())
     }
 }
 

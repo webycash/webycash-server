@@ -99,28 +99,95 @@ impl Verifier for MockVerifier {
 #[cfg(feature = "zkp-arkworks")]
 mod arkworks_impl {
     //! Real Groth16 verifier over BN254. The verifying keys for both
-    //! circuits are serialised with `ark-serialize` and stored at boot.
+    //! circuits are serialised with `ark-serialize` (canonical
+    //! compressed form) and loaded at boot.
     //!
-    //! Circuit definitions live in extro-node; this crate only loads the
-    //! verifying keys + verifies proofs.
+    //! Circuit definitions live in extro-node; this crate only loads
+    //! the verifying keys + verifies proofs. The proof bytes and
+    //! public inputs in [`Groth16Proof`] are interpreted as
+    //! `ark-serialize` canonical encodings; mismatches cause
+    //! verification to fail with `RefereeError::ZkpRejected` at
+    //! runtime.
     use super::*;
-    use ark_bn254::Bn254;
-    use ark_groth16::{Groth16, PreparedVerifyingKey};
+    use crate::error::RefereeError;
+    use ark_bn254::{Bn254, Fr};
+    use ark_ff::PrimeField;
+    use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, VerifyingKey};
+    use ark_serialize::CanonicalDeserialize;
+    use std::path::Path;
 
     /// Real verifier holding pre-prepared verifying keys for both circuits.
     pub struct ArkworksVerifier {
+        /// Prepared VK for Bob's payload-honesty circuit.
         pub vk_bob_payload: PreparedVerifyingKey<Bn254>,
+        /// Prepared VK for Alice's signature-honesty circuit.
         pub vk_alice_signature: PreparedVerifyingKey<Bn254>,
+    }
+
+    impl ArkworksVerifier {
+        /// Load the two verifying-key fixtures from disk. Each file
+        /// must contain the canonical-compressed serialisation of
+        /// `ark_groth16::VerifyingKey<Bn254>` produced by
+        /// extro-node's circuit setup. See
+        /// `webycash-server/referee/docs/zkp-circuits.md`.
+        pub fn load_from_files(
+            vk_bob_path: impl AsRef<Path>,
+            vk_alice_path: impl AsRef<Path>,
+        ) -> Result<Self> {
+            let vk_bob = load_vk(vk_bob_path.as_ref())?;
+            let vk_alice = load_vk(vk_alice_path.as_ref())?;
+            Ok(Self {
+                vk_bob_payload: PreparedVerifyingKey::from(vk_bob),
+                vk_alice_signature: PreparedVerifyingKey::from(vk_alice),
+            })
+        }
+
+        fn vk_for(&self, circuit: Circuit) -> &PreparedVerifyingKey<Bn254> {
+            match circuit {
+                Circuit::BobPayload => &self.vk_bob_payload,
+                Circuit::AliceSignature => &self.vk_alice_signature,
+            }
+        }
+    }
+
+    fn load_vk(path: &Path) -> Result<VerifyingKey<Bn254>> {
+        let bytes = std::fs::read(path)
+            .map_err(|e| RefereeError::Crypto(format!("vk read {}: {e}", path.display())))?;
+        VerifyingKey::<Bn254>::deserialize_compressed(&*bytes)
+            .map_err(|e| RefereeError::Crypto(format!("vk decode {}: {e}", path.display())))
+    }
+
+    fn decode_proof(bytes: &[u8]) -> Result<Proof<Bn254>> {
+        Proof::<Bn254>::deserialize_compressed(bytes)
+            .map_err(|e| RefereeError::Crypto(format!("proof decode: {e}")))
+    }
+
+    fn decode_public_inputs(inputs: &[Vec<u8>]) -> Result<Vec<Fr>> {
+        // Each public input is the big-endian encoding of an Fr
+        // element. We interpret them as little-endian here only if
+        // extro-node agrees — for now we use BE since that matches
+        // the circuit-fixture convention extro-node will produce.
+        inputs
+            .iter()
+            .map(|bytes| {
+                if bytes.len() > 32 {
+                    return Err(RefereeError::Crypto(
+                        "public input larger than 32 bytes".into(),
+                    ));
+                }
+                Ok(Fr::from_be_bytes_mod_order(bytes))
+            })
+            .collect()
     }
 
     #[async_trait]
     impl Verifier for ArkworksVerifier {
-        async fn verify(&self, _circuit: Circuit, _proof: &Groth16Proof) -> Result<bool> {
-            // Real implementation: deserialize proof + public_inputs,
-            // call Groth16::<Bn254>::verify_with_processed_vk(vk, &public_inputs, &proof).
-            // Stubbed here pending circuit fixtures from extro-node;
-            // tracked in docs/zkp-circuits.md.
-            Ok(true)
+        async fn verify(&self, circuit: Circuit, proof: &Groth16Proof) -> Result<bool> {
+            let pvk = self.vk_for(circuit);
+            let p = decode_proof(&proof.proof)?;
+            let inputs = decode_public_inputs(&proof.public_inputs)?;
+            Groth16::<Bn254>::verify_proof(pvk, &p, &inputs)
+                .map_err(|e| RefereeError::Crypto(format!("groth16 verify: {e}")))
         }
     }
 }
