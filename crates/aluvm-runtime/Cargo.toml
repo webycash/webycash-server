@@ -1,0 +1,20 @@
+[package]
+name = "webycash-aluvm-runtime"
+description = "AluVM execution context shared by asset-rgb (server) and the wallet-rgb crate (webylib). Native + WASM symmetry."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+hex = { workspace = true }
+# Real AluVM execution. Integrating actual rgb-core schema validation
+# is a multi-week follow-up; this crate currently exposes a working
+# Vm wrapper that loads + executes a CompiledLib and reports its
+# Status. webycash-asset-rgb's validate_transfer hook is wired to
+# call into this once a contract schema is supplied.
+aluvm = "0.12"

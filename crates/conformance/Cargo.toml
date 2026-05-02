@@ -1,0 +1,39 @@
+[package]
+name = "webycash-conformance"
+description = "Wire-format conformance suite for the Webcash flavor. Static fixtures + property tests + live-webcash-org smoke harness."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# Run the live smoke harness against https://webcash.org. Off by default so
+# CI offline runs stay fast and deterministic.
+live-webcash-org = []
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tokio = { workspace = true }
+sha2 = { workspace = true }
+serde_json = { workspace = true }
+ed25519-dalek = { workspace = true }
+hex = { workspace = true }
+pgp = "0.19"
+rand = "0.8"
+tempfile = "3"
+webycash-asset-core = { workspace = true }
+webycash-asset-webcash = { workspace = true }
+webycash-asset-rgb = { workspace = true }
+webycash-asset-voucher = { workspace = true }
+webycash-storage = { workspace = true }
+chrono = { workspace = true }

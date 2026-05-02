@@ -1,0 +1,31 @@
+{
+  "captured_at": "2026-04-25T14:06:25Z",
+  "request": {
+    "method": "GET",
+    "url": "https://webcash.org/terms/text",
+    "headers": {
+      "User-Agent": "webycash-conformance-harness/0.1"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "text/html; charset=UTF-8",
+      "Content-Length": "42812",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "x-requested-with",
+      "Access-Control-Allow-Methods": "GET, OPTIONS",
+      "Strict-Transport-Security": "max-age=15768000"
+    },
+    "body_file": "terms_text.body",
+    "body_sha256": "540b345333ce1f04769c15c6593e83ebf098df74683c4515de51f1588ed69990",
+    "body_length": 42812
+  },
+  "notes": [
+    "The terms text endpoint is /terms/text (note the /text suffix), not /terms.",
+    "Body is plain text despite the text/html Content-Type.",
+    "Body content is the legal Terms of Service prose; not expected to drift often, but every drift is potentially material so we hash-pin.",
+    "Allow-Methods header for this endpoint is 'GET, OPTIONS' — narrower than the 'POST, GET, OPTIONS' on /api/v1 endpoints."
+  ]
+}

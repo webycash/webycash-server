@@ -1,9 +1,54 @@
 [workspace]
 resolver = "2"
-members = ["crates/server", "crates/macros"]
+
+# Default cargo build builds only the Webcash binary. The other rails are
+# opt-in by explicit -p selection:
+#
+#   cargo build                              → server-webcash (default)
+#   cargo build -p server-rgb                → adds RgbFungible binary
+#   cargo build -p server-rgb-collectible    → adds RgbCollectible binary
+#   cargo build -p server-voucher            → adds Voucher binary
+#   cargo build -p referee                   → adds the referee binary
+#                                              (Webcash ↔ ARK swap helper;
+#                                              docs/referee-zkp-based-swap.md §4)
+#   cargo build --workspace                  → builds everything
+#
+# This expresses "default = webcash only; rgb, voucher, referee are opt-in"
+# in idiomatic cargo. Members beyond server-webcash are still in the workspace
+# so they share Cargo.lock, but they are NOT compiled by `cargo build` unless
+# explicitly named.
+default-members = ["crates/server-webcash"]
+
+members = [
+    # Existing
+    "crates/server",
+    "crates/macros",
+
+    # Asset-gated refactor scaffolding (M0)
+    "crates/proto",
+    "crates/asset-core",
+    "crates/asset-webcash",
+    "crates/asset-rgb",
+    "crates/asset-voucher",
+    "crates/auth",
+    "crates/storage",
+    "crates/compute",
+    "crates/mining",
+    "crates/aluvm-runtime",
+    "crates/server-core",
+    "crates/server-webcash",
+    "crates/server-rgb",
+    "crates/server-rgb-collectible",
+    "crates/server-voucher",
+    "crates/conformance",
+
+    # Webcash ↔ Bitcoin ARK swap helper (M-5 in plan).
+    # Stub at this milestone; populated in M-5.
+    "referee",
+]
 
 [workspace.package]
-version = "0.2.3"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT"
@@ -37,6 +82,8 @@ nom = "7"
 sha2 = "0.10"
 hex = "0.4"
 base64 = "0.22"
+ed25519-dalek = "2"
+hmac = "0.12"
 
 # Databases
 aws-config = "1"
@@ -68,3 +115,20 @@ proc-macro2 = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 rand = "0.8"
 tokio-stream = "0.1"
+
+# Testing
+proptest = "1"
+
+# Internal crate paths (workspace members reference each other through these)
+webycash-macros = { path = "crates/macros" }
+webycash-proto = { path = "crates/proto" }
+webycash-asset-core = { path = "crates/asset-core" }
+webycash-asset-webcash = { path = "crates/asset-webcash" }
+webycash-asset-rgb = { path = "crates/asset-rgb" }
+webycash-asset-voucher = { path = "crates/asset-voucher" }
+webycash-auth = { path = "crates/auth" }
+webycash-storage = { path = "crates/storage" }
+webycash-compute = { path = "crates/compute" }
+webycash-mining = { path = "crates/mining" }
+webycash-aluvm-runtime = { path = "crates/aluvm-runtime" }
+webycash-server-core = { path = "crates/server-core" }

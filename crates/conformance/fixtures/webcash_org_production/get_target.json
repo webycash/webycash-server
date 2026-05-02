@@ -1,0 +1,35 @@
+{
+  "captured_at": "2026-04-25T14:06:24Z",
+  "request": {
+    "method": "GET",
+    "url": "https://webcash.org/api/v1/target",
+    "headers": {
+      "User-Agent": "webycash-conformance-harness/0.1"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "text/html; charset=UTF-8",
+      "Content-Length": "127",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "x-requested-with",
+      "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+      "Strict-Transport-Security": "max-age=15768000"
+    },
+    "body_raw": "{\"difficulty_target_bits\": 36, \"ratio\": 0.39707, \"mining_amount\": \"195.3125\", \"mining_subsidy_amount\": \"9.765625\", \"epoch\": 10}",
+    "body_parsed": {
+      "difficulty_target_bits": 36,
+      "ratio": 0.39707,
+      "mining_amount": "195.3125",
+      "mining_subsidy_amount": "9.765625",
+      "epoch": 10
+    }
+  },
+  "notes": [
+    "Field order in raw body matters for byte-exact comparison: difficulty_target_bits, ratio, mining_amount, mining_subsidy_amount, epoch.",
+    "Amounts are JSON strings (not numbers) to preserve decimal precision.",
+    "ratio is a float, NOT a string."
+  ]
+}

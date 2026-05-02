@@ -1,0 +1,208 @@
+# Local development + integration topology with ALL FOUR storage backends.
+#
+# Boots three asset-gated server flavors (webcash, rgb, voucher) and ships
+# every storage backend the server supports (Redis, DynamoDB Local,
+# FoundationDB, Redis+FDB composite). Pick which backend a flavor uses
+# via the `WEBCASH_DB_BACKEND` env var on its service.
+#
+# Usage:
+#   docker compose -f docker-compose.local.yml up --build
+#
+# Default ports (host:container):
+#   server-webcash → :8181  (backend: redis)
+#   server-rgb     → :8182  (backend: redis)
+#   server-voucher → :8183  (backend: redis)
+#   ddb-local      → :8000
+#   redis-webcash  → :6391
+#   redis-rgb      → :6392
+#   redis-voucher  → :6393
+#
+# To switch a flavor to DynamoDB:
+#   docker compose -f docker-compose.local.yml \
+#       -e WEBCASH_DB_BACKEND=dynamodb up server-webcash
+#
+# FoundationDB (opt-in; requires the `fdb` cargo feature):
+#   docker compose -f docker-compose.local.yml --profile fdb up
+
+services:
+  redis-webcash: &redis
+    image: redis:7-alpine
+    command: >
+      redis-server --port 6379
+      --io-threads 4 --io-threads-do-reads yes
+      --save "" --appendonly no --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+    networks: [local]
+
+  redis-rgb:
+    <<: *redis
+    networks: [local]
+
+  redis-voucher:
+    <<: *redis
+    networks: [local]
+
+  # External Redis ports for ad-hoc inspection.
+  redis-webcash-ext:
+    <<: *redis
+    ports: ["6391:6379"]
+    networks: [local]
+  redis-rgb-ext:
+    <<: *redis
+    ports: ["6392:6379"]
+    networks: [local]
+  redis-voucher-ext:
+    <<: *redis
+    ports: ["6393:6379"]
+    networks: [local]
+
+  # Amazon's DynamoDB Local — drop-in replacement for real DynamoDB,
+  # used by ALL three server flavors when WEBCASH_DB_BACKEND=dynamodb.
+  ddb-local:
+    image: amazon/dynamodb-local:latest
+    command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
+    ports: ["8000:8000"]
+    networks: [local]
+
+  # FoundationDB cluster (single-node, for local dev). Profile-gated so
+  # most users don't pay the startup cost.
+  foundationdb:
+    profiles: [fdb]
+    image: foundationdb/foundationdb:7.3.43
+    environment:
+      FDB_NETWORKING_MODE: host
+    volumes: [fdb-data:/var/fdb/data]
+    networks: [local]
+
+  fdb-init:
+    profiles: [fdb]
+    image: foundationdb/foundationdb:7.3.43
+    depends_on: [foundationdb]
+    entrypoint: ["/bin/bash", "-c"]
+    command: ['sleep 2 && fdbcli --exec "configure new single memory"']
+    networks: [local]
+
+  # ── Server flavors ─────────────────────────────────────────────────
+
+  server-webcash:
+    build:
+      context: .
+      dockerfile: Dockerfile.flavor
+      args:
+        FLAVOR: webcash
+    image: webycash/server-webcash:dev
+    environment:
+      WEBCASH_MODE: testnet
+      WEBCASH_DB_BACKEND: ${WEBCASH_DB_BACKEND:-redis}
+      REDIS_URL: redis://redis-webcash:6379
+      DYNAMODB_ENDPOINT: http://ddb-local:8000
+      AWS_ACCESS_KEY_ID: fake
+      AWS_SECRET_ACCESS_KEY: fake
+      AWS_REGION: us-east-1
+      WEBCASH_BIND_ADDR: 0.0.0.0:8080
+      WEBYCASH_DIFFICULTY: "4"
+      RUST_LOG: webycash_server_webcash=info,webycash_server_core=info
+    ports: ["8181:8080"]
+    depends_on:
+      redis-webcash:
+        condition: service_healthy
+      ddb-local:
+        condition: service_started
+    networks: [local]
+
+  server-rgb:
+    build:
+      context: .
+      dockerfile: Dockerfile.flavor
+      args:
+        FLAVOR: rgb
+    image: webycash/server-rgb:dev
+    environment:
+      WEBCASH_MODE: testnet
+      WEBCASH_DB_BACKEND: ${WEBCASH_DB_BACKEND:-redis}
+      REDIS_URL: redis://redis-rgb:6379
+      DYNAMODB_ENDPOINT: http://ddb-local:8000
+      AWS_ACCESS_KEY_ID: fake
+      AWS_SECRET_ACCESS_KEY: fake
+      AWS_REGION: us-east-1
+      WEBCASH_BIND_ADDR: 0.0.0.0:8080
+      WEBYCASH_DIFFICULTY: "4"
+      WEBYCASH_MINING_REQUIRED_FOR_ISSUANCE: "false"
+      WEBYCASH_ISSUERS: ${WEBYCASH_ISSUERS:-}
+      RUST_LOG: webycash_server_rgb=info,webycash_server_core=info
+    ports: ["8182:8080"]
+    depends_on:
+      redis-rgb:
+        condition: service_healthy
+      ddb-local:
+        condition: service_started
+    networks: [local]
+
+  redis-rgb-collectible:
+    <<: *redis
+    networks: [local]
+
+  server-rgb-collectible:
+    build:
+      context: .
+      dockerfile: Dockerfile.flavor
+      args:
+        FLAVOR: rgb-collectible
+    image: webycash/server-rgb-collectible:dev
+    environment:
+      WEBCASH_MODE: testnet
+      WEBCASH_DB_BACKEND: ${WEBCASH_DB_BACKEND:-redis}
+      REDIS_URL: redis://redis-rgb-collectible:6379
+      DYNAMODB_ENDPOINT: http://ddb-local:8000
+      AWS_ACCESS_KEY_ID: fake
+      AWS_SECRET_ACCESS_KEY: fake
+      AWS_REGION: us-east-1
+      WEBCASH_BIND_ADDR: 0.0.0.0:8080
+      WEBYCASH_ISSUERS: ${WEBYCASH_ISSUERS:-}
+      RUST_LOG: webycash_server_rgb_collectible=info,webycash_server_core=info
+    ports: ["8184:8080"]
+    depends_on:
+      redis-rgb-collectible:
+        condition: service_healthy
+      ddb-local:
+        condition: service_started
+    networks: [local]
+
+  server-voucher:
+    build:
+      context: .
+      dockerfile: Dockerfile.flavor
+      args:
+        FLAVOR: voucher
+    image: webycash/server-voucher:dev
+    environment:
+      WEBCASH_MODE: testnet
+      WEBCASH_DB_BACKEND: ${WEBCASH_DB_BACKEND:-redis}
+      REDIS_URL: redis://redis-voucher:6379
+      DYNAMODB_ENDPOINT: http://ddb-local:8000
+      AWS_ACCESS_KEY_ID: fake
+      AWS_SECRET_ACCESS_KEY: fake
+      AWS_REGION: us-east-1
+      WEBCASH_BIND_ADDR: 0.0.0.0:8080
+      WEBYCASH_DIFFICULTY: "4"
+      WEBYCASH_MINING_REQUIRED_FOR_ISSUANCE: "false"
+      WEBYCASH_ISSUERS: ${WEBYCASH_ISSUERS:-}
+      RUST_LOG: webycash_server_voucher=info,webycash_server_core=info
+    ports: ["8183:8080"]
+    depends_on:
+      redis-voucher:
+        condition: service_healthy
+      ddb-local:
+        condition: service_started
+    networks: [local]
+
+networks:
+  local:
+    driver: bridge
+
+volumes:
+  fdb-data:

@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 7e35e2031dc3184672a1ddda17463e80c3759599f7e48c03b7cac522f30a6560 # shrinks to amount = Amount { wats: 1 }, secret = "a0a000a0aaa00a0a0a0aaaa000aa0aaa0aa0aa0000a0a000aa00a0aa00a000aa", contract = ContractId("A"), fp = PgpFingerprint("aa000aaaaaa00aa00a000000aaa0a00a0a00a000")

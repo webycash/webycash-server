@@ -1,0 +1,20 @@
+[package]
+name = "webycash-asset-voucher"
+description = "Asset implementation for Vouchers — always splittable, issuer-namespaced bearer credits. No AluVM."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+webycash-asset-core = { workspace = true }
+webycash-proto = { workspace = true }
+webycash-storage = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+nom = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }

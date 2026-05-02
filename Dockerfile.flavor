@@ -1,0 +1,47 @@
+# webycash-server flavor Dockerfile
+#
+# Builds one of the three asset-gated server binaries from the workspace.
+#
+# Usage:
+#   docker build --build-arg FLAVOR=webcash -t webycash/server-webcash -f Dockerfile.flavor .
+#   docker build --build-arg FLAVOR=rgb     -t webycash/server-rgb     -f Dockerfile.flavor .
+#   docker build --build-arg FLAVOR=voucher -t webycash/server-voucher -f Dockerfile.flavor .
+#
+# FLAVOR must be one of: webcash, rgb, rgb-collectible, voucher.
+
+ARG FLAVOR=webcash
+
+# ── Build stage ─────────────────────────────────────────────────────
+#
+# Newer transitive deps (icu_properties_data 2.2, time 0.3.47, time-core
+# 0.1.8, aws-smithy-runtime-api 1.11.6 / aws-types 1.3.14) require rustc
+# ≥ 1.91. We pin to a recent 1.x stable image. Alpine + musl gives a
+# fully static binary; no glibc runtime in final.
+FROM rust:1.92-alpine AS build
+ARG FLAVOR
+RUN apk add --no-cache musl-dev pkgconfig openssl-dev openssl-libs-static
+WORKDIR /app
+COPY . .
+RUN cargo build --release --bin webycash-server-${FLAVOR} && \
+    strip target/release/webycash-server-${FLAVOR} && \
+    cp target/release/webycash-server-${FLAVOR} /server
+
+# ── Runtime stage ───────────────────────────────────────────────────
+
+FROM alpine:3.21
+ARG FLAVOR
+RUN apk add --no-cache ca-certificates
+COPY --from=build /server /usr/local/bin/server
+COPY config/ /etc/webycash/
+EXPOSE 8080
+ENV WEBYCASH_FLAVOR=${FLAVOR}
+
+# Liveness probe: GET /api/v1/target. Every flavor exposes it; the
+# response carries `difficulty_target_bits` whether the binary is
+# webcash, rgb, rgb-collectible, or voucher. wget is BusyBox-bundled
+# in alpine, so no extra package install is needed.
+HEALTHCHECK --interval=15s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget -q -O - http://127.0.0.1:8080/api/v1/target \
+        | grep -q difficulty_target_bits || exit 1
+
+ENTRYPOINT ["server"]

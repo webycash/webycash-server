@@ -1,0 +1,37 @@
+[package]
+name = "webycash-storage"
+description = "LedgerStore trait + 4 backends (Redis, DynamoDB, FoundationDB, Redis+FDB). Generic over Asset; partitioned by (asset, contract_id, issuer_fp, public_hash)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+redis = ["dep:redis"]
+dynamodb = ["dep:aws-config", "dep:aws-sdk-dynamodb", "dep:serde_dynamo"]
+fdb = ["dep:foundationdb"]
+redis-fdb = ["redis", "fdb"]
+
+[dependencies]
+webycash-asset-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+hex = { workspace = true }
+uuid = { workspace = true }
+
+redis = { workspace = true, optional = true }
+aws-config = { workspace = true, optional = true }
+aws-sdk-dynamodb = { workspace = true, optional = true }
+serde_dynamo = { workspace = true, optional = true }
+foundationdb = { workspace = true, optional = true }
+
+futures = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }

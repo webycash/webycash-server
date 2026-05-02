@@ -1,0 +1,18 @@
+[package]
+name = "webycash-asset-core"
+description = "Core trait hierarchy for webycash asset flavors (Asset, SplittableAsset, TransferableAsset, IssuedAsset, MintableAsset)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+hex = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

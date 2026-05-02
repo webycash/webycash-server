@@ -1,0 +1,39 @@
+{
+  "captured_at": "2026-04-25T14:06:49Z",
+  "request": {
+    "method": "POST",
+    "url": "https://webcash.org/api/v1/health_check",
+    "headers": {
+      "User-Agent": "webycash-conformance-harness/0.1",
+      "Content-Type": "application/json"
+    },
+    "body_raw": "[\"e1.0:public:0000000000000000000000000000000000000000000000000000000000000000\"]"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "text/html; charset=UTF-8",
+      "Content-Length": "129",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "x-requested-with",
+      "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+      "Strict-Transport-Security": "max-age=15768000"
+    },
+    "body_raw": "{\"status\": \"success\", \"results\": {\"e1:public:0000000000000000000000000000000000000000000000000000000000000000\": {\"spent\": null}}}",
+    "body_parsed": {
+      "status": "success",
+      "results": {
+        "e1:public:0000000000000000000000000000000000000000000000000000000000000000": {
+          "spent": null
+        }
+      }
+    }
+  },
+  "notes": [
+    "Request body is a bare JSON array of token strings, NOT an object with a 'webcashes' field.",
+    "Sending {\"webcashes\":[...]} returns 500 Internal Server Error.",
+    "Amount normalization: 'e1.0:public:...' in request becomes 'e1:public:...' in response key. Trailing .0 is stripped by the production server.",
+    "spent: null means 'unknown' (token never seen). spent: true means spent. spent: false means unspent.",
+    "Response keys preserve the (normalized) full token string."
+  ]
+}
