@@ -10,7 +10,7 @@
 //! Wire-format note: RGB21 has NO amount segment. Tokens are
 //! `secret:{hex64}:{contract}:{issuer}` (no `e1.0:` prefix).
 //!
-//! Because RGB21 cannot mine, every test mints its starting NFT through
+//! Because RGB21 cannot mine, every test mints its starting record through
 //! the operator-signed `/api/v1/issue` flow (Ed25519 signature over the
 //! canonical body, registered via the `WEBYCASH_ISSUERS` env var).
 //!
@@ -119,7 +119,7 @@ impl CollectibleHarness {
         })
     }
 
-    /// Mint a single NFT via `/api/v1/issue` — Ed25519-signed canonical body.
+    /// Mint a single RGB21 record via `/api/v1/issue` — Ed25519-signed canonical body.
     fn issue(&self, contract: &str, secret_hex: &str, nonce: &str) {
         let body_obj = serde_json::json!({
             "issuer_fp": self.issuer,

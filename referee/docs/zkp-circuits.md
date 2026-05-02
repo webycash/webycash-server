@@ -2,17 +2,18 @@
 
 ## Why two circuits
 
-The referee verifies *honesty* of two ciphertexts without ever decrypting
-them:
+The referee verifies *honesty* of two ciphertexts. Each circuit is a
+Groth16 proof that the corresponding encryption is well-formed against
+the public commitments in the audit chain:
 
-- **Bob's payload-honesty circuit**: the encrypted-to-Alice ciphertext
-  decrypts under Alice's PGP private key to a 32-byte value `S` whose
-  SHA-256 is `H_B` (the public hash already verified unspent on
+- **Bob's payload-honesty circuit**: `EncSec_B_to_A` is a well-formed
+  PGP encryption to `Alice_pgp_pubkey` of a 32-byte value `S` with
+  `sha256(S) = H_B` (the public hash already verified unspent on
   webcash.org).
-- **Alice's signature-honesty circuit**: the encrypted-to-Bob ciphertext
-  decrypts under Bob's PGP private key to a value `sig` that is a valid
-  MuSig2 partial-sig by Alice on `TX_settle` under her published
-  pubshare and the agreed nonces.
+- **Alice's signature-honesty circuit**: `EncSig_A_to_B` is a
+  well-formed PGP encryption to `Bob_pgp_pubkey` of a valid MuSig2
+  partial-sig by Alice on `TX_settle` under her published pubshare and
+  the agreed nonces.
 
 Both circuits use Groth16. The proving system was selected for short
 proofs (≈200 bytes), constant verification time, and broad WASM
@@ -24,7 +25,7 @@ toolchain support (arkworks + circom).
 
 ```text
 ∃ S, sk_A_session, salt :
-   pgp_decrypt(EncSec_B_to_A, sk_A_session, salt) = S
+   pgp_encrypt(Alice_pgp_pubkey, S, sk_A_session, salt) = EncSec_B_to_A
    ∧ |S| = 32 bytes
    ∧ sha256(S) = H_B
 ```
@@ -32,10 +33,10 @@ toolchain support (arkworks + circom).
 Where:
 
 - `EncSec_B_to_A` is the public PGP ciphertext (committed in the audit log).
-- `sk_A_session` is the symmetric session key extracted by hybrid-PGP
-  decryption under Alice's PGP private key. Witness only.
+- `sk_A_session` is the symmetric session key bound by hybrid-PGP under
+  Alice's PGP pubkey. Witness only.
 - `salt` is whatever the PGP encryption scheme uses (CFB IV, etc.).
-- `S` is the cleartext webcash secret. Witness only.
+- `S` is the bearer-cash secret bound to the recipient. Witness only.
 - `H_B` is the public sha256.
 
 ### Public inputs
@@ -67,7 +68,7 @@ Where:
 
 ```text
 ∃ sig, sk_B_session, salt :
-   pgp_decrypt(EncSig_A_to_B, sk_B_session, salt) = sig
+   pgp_encrypt(Bob_pgp_pubkey, sig, sk_B_session, salt) = EncSig_A_to_B
    ∧ MuSig2_partial_verify(sig,
                            alice_pubshare,
                            tx_settle_hash,
@@ -78,10 +79,10 @@ Where:
 
 Where:
 
-- `EncSig_A_to_B` is the public PGP ciphertext.
+- `EncSig_A_to_B` is the public PGP ciphertext addressed to Bob.
 - `sig` is Alice's 32-byte MuSig2 partial-signature scalar. Witness only.
-- `sk_B_session` is the symmetric session key from hybrid-PGP under
-  Bob's private key.
+- `sk_B_session` is the symmetric session key bound by hybrid-PGP
+  under Bob's PGP pubkey.
 - `MuSig2_partial_verify` checks that `sig` is a valid partial-sig under
   Alice's pubshare given the per-session nonces + combined pubkey.
 

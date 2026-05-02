@@ -37,7 +37,7 @@ docker compose -f docker-compose.local.yml down -v
 
 ## Lifecycle exercised per flavor
 
-| Step       | Webcash             | RGB20 split.   | RGB21 NFT      | Voucher        |
+| Step       | Webcash             | RGB20          | RGB21          | Voucher        |
 |------------|---------------------|----------------|----------------|----------------|
 | Mint/Issue | `/mining_report`    | `/issue`       | `/issue`       | `/issue`       |
 | Balance    | `/health_check`     | same           | same           | same           |

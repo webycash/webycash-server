@@ -1,6 +1,6 @@
 [package]
 name = "webycash-asset-rgb"
-description = "Asset implementation for RGB (RGB20 fungible/splittable, RGB21 NFT/non-splittable). Issuer-namespaced. Uses official LNP/BP + UBIDECO crates."
+description = "Asset implementation for RGB — RGB20 (splittable) and RGB21 (non-splittable, licensable: Perpetual or Royalties License). Issuer-namespaced. Uses official LNP/BP + UBIDECO crates."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

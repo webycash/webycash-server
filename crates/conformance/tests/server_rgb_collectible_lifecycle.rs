@@ -1,7 +1,7 @@
-//! RGB21 Collectible (NFT) end-to-end lifecycle.
+//! RGB21 Collectible end-to-end lifecycle.
 //!
 //! Boots Redis + server-rgb-collectible. Drives:
-//!   - `/api/v1/issue` (operator-signed mint of an NFT)
+//!   - `/api/v1/issue` (operator-signed mint of one collectible)
 //!   - `/api/v1/health_check` (mints unspent)
 //!   - `/api/v1/transfer` (1:1 ownership move; same namespace)
 //!   - `/api/v1/health_check` (input spent, output unspent)
@@ -84,13 +84,13 @@ fn rgb_collectible_full_lifecycle() {
 
 fn run_lifecycle(bind: &str, sk: &SigningKey, issuer: &str) {
     let contract = "art-collection-1";
-    let nft_secret = "a".repeat(64);
-    let nft_hash = sha256_hex(&nft_secret);
+    let collectible_secret = "a".repeat(64);
+    let collectible_hash = sha256_hex(&collectible_secret);
 
-    // 1. /api/v1/issue — sign and mint a single NFT.
+    // 1. /api/v1/issue — sign and mint a single RGB21 record.
     let body_obj = serde_json::json!({
         "issuer_fp": issuer,
-        "outputs": [format!("secret:{nft_secret}:{contract}:{issuer}")],
+        "outputs": [format!("secret:{collectible_secret}:{contract}:{issuer}")],
         "nonce": "issue-1",
         "ts": 1714003200_u64,
         "legalese": {"terms": true},
@@ -106,8 +106,8 @@ fn run_lifecycle(bind: &str, sk: &SigningKey, issuer: &str) {
     .expect("issue");
     assert_eq!(status, 200, "issue: {resp_body}");
 
-    // 2. health_check — NFT must show unspent.
-    let public_token = format!("public:{nft_hash}:{contract}:{issuer}");
+    // 2. health_check — collectible must show unspent.
+    let public_token = format!("public:{collectible_hash}:{contract}:{issuer}");
     let (status, body) = post(
         &format!("http://{bind}/api/v1/health_check"),
         &serde_json::to_string(&serde_json::json!([public_token])).unwrap(),
@@ -124,7 +124,7 @@ fn run_lifecycle(bind: &str, sk: &SigningKey, issuer: &str) {
     let (status, body) = post(
         &format!("http://{bind}/api/v1/replace"),
         &serde_json::to_string(&serde_json::json!({
-            "webcashes": [format!("secret:{nft_secret}:{contract}:{issuer}")],
+            "webcashes": [format!("secret:{collectible_secret}:{contract}:{issuer}")],
             "new_webcashes": [format!("secret:{new_secret}:{contract}:{issuer}")],
             "legalese": {"terms": true},
         }))

@@ -1,9 +1,10 @@
 //! Asset implementations for RGB contracts.
 //!
 //! Two distinct asset types share this crate:
-//! - `RgbFungible` (RGB20-like, splittable, fungible): implements
+//! - `RgbFungible` (RGB20, splittable, fungible): implements
 //!   `Asset + SplittableAsset + IssuedAsset + MintableAsset + RecordBuilder`.
-//! - `RgbCollectible` (RGB21-like, non-splittable, NFT): implements
+//! - `RgbCollectible` (RGB21, non-splittable, licensable — Perpetual or
+//!   Royalties License): implements
 //!   `Asset + TransferableAsset + IssuedAsset + MintableAsset`.
 //!
 //! Compile-time gating means a server binary built for `RgbCollectible`
@@ -61,7 +62,7 @@ impl std::fmt::Display for RgbOrigin {
     }
 }
 
-/// In-DB record for an RGB20 fungible token. Carries the public hash,
+/// In-DB record for an RGB20 token. Carries the public hash,
 /// amount, spent state, the namespace pair (contract_id, issuer_fp),
 /// and provenance (mined / issued / replaced).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -205,7 +206,7 @@ impl webycash_storage::HashRecord for RgbCollectibleRecord {
         &self.public_hash
     }
     fn amount_wats(&self) -> i64 {
-        // NFTs have no fungible amount; report 0.
+        // RGB21 records carry no fungible amount; report 0.
         0
     }
     fn namespace(&self) -> webycash_storage::Namespace {
@@ -288,20 +289,20 @@ pub struct RgbFungibleIssuance {
     pub records: Vec<RgbFungibleRecord>,
 }
 
-/// Same shape as `RgbFungibleIssuance` for RGB21 collectibles. Each
-/// record represents one NFT to mint.
+/// Same shape as `RgbFungibleIssuance` for RGB21. Each record
+/// represents one collectible to mint.
 #[derive(Debug, Clone)]
 pub struct RgbCollectibleIssuance {
     /// Records to insert. Every record must share the same
-    /// `(contract_id, issuer_fp)`; one record per NFT.
+    /// `(contract_id, issuer_fp)`; one record per collectible.
     pub records: Vec<RgbCollectibleRecord>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RGB20 fungible asset
+// RGB20 (fungible) asset
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Zero-sized type identifying the RGB20 fungible asset flavor.
+/// Zero-sized type identifying the RGB20 (fungible) asset flavor.
 /// Implements `Asset + SplittableAsset + IssuedAsset + MintableAsset
 /// + RecordBuilder` for `Server<RgbFungible, _>`.
 pub struct RgbFungible;
@@ -543,7 +544,8 @@ fn parse_htlc_locks(body: &[u8]) -> AssetResult<Vec<HtlcLockEntry>> {
 // RGB21 collectible asset (non-splittable, transfer-only)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Zero-sized type identifying the RGB21 collectible (NFT) flavor.
+/// Zero-sized type identifying the RGB21 collectible flavor
+/// (non-splittable, licensable — Perpetual or Royalties License).
 /// Implements `Asset + TransferableAsset + IssuedAsset + MintableAsset
 /// + CollectibleRecordBuilder` for `Server<RgbCollectible, _>`.
 /// Notably does NOT implement `SplittableAsset`.

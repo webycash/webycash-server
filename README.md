@@ -28,8 +28,8 @@ Open-source webcash protocol server implementation in Rust.
 | Binary | Asset | Splittable | Namespace | Mining-only? |
 |--------|-------|------------|-----------|--------------|
 | `webycash-server-webcash` | Webcash | yes | none (frozen) | yes |
-| `webycash-server-rgb` | RGB20 fungible | yes | `(contract_id, issuer_fp)` | no |
-| `webycash-server-rgb-collectible` | RGB21 NFT | no (1:1) | `(contract_id, issuer_fp)` | no |
+| `webycash-server-rgb` | RGB20 (fungible) | yes | `(contract_id, issuer_fp)` | no |
+| `webycash-server-rgb-collectible` | RGB21 (licensable non-fungible — Perpetual or Royalties License) | no (1:1) | `(contract_id, issuer_fp)` | no |
 | `webycash-server-voucher` | Voucher | yes | `(contract_id, issuer_fp)` | no |
 
 ## API Endpoints

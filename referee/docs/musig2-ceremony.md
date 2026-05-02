@@ -54,28 +54,31 @@ Alice produces:
 - `s_A_refund = MuSig2_partial_sign(secnonce_R_A, secret_A, msg = tx_refund_hash, both_pubnonces, both_pubshares)`
 
 She **encrypts `s_A_settle` to Bob's PGP pubkey** and submits the
-ciphertext + a Groth16 ZKP that the ciphertext decrypts to a valid
-partial-sig (see `docs/zkp-circuits.md` Alice's circuit). She **keeps
-`s_A_refund` strictly local** — it is never given to anyone.
+ciphertext + a Groth16 ZKP that the ciphertext is a well-formed
+encryption of a valid partial-sig under Alice's MuSig2 share (see
+`docs/zkp-circuits.md` Alice's circuit). She **keeps `s_A_refund`
+strictly local** — it is never given to anyone.
 
 ### Referee's partial-sigs (produced server-side at terminal phase)
 
 On the **success path**, the referee produces `s_R_settle` and pushes
-`(s_R_settle, EncSig_A_to_B)` to Bob. Bob decrypts to recover `s_A_settle`,
-aggregates `s_A_settle + s_R_settle` (BIP327), broadcasts `TX_settle`.
+`(s_R_settle, EncSig_A_to_B)` to Bob. Bob recovers `s_A_settle` from
+`EncSig_A_to_B` with his PGP private key, aggregates `s_A_settle +
+s_R_settle` (BIP327), broadcasts `TX_settle`.
 
 On the **abort path**, the referee produces `s_R_refund` and pushes it
-**cleartext to Alice** (she's the recipient). Alice has her local
-`s_A_refund` and aggregates them; broadcasts `TX_refund`.
+to Alice (she's the recipient). Alice has her local `s_A_refund` and
+aggregates them; broadcasts `TX_refund`.
 
 ## Cryptographic invariants (enforced)
 
 Restated from `referee-zkp-based-swap.md §5`:
 
-1. The referee NEVER holds Alice's `s_A_settle` in cleartext. It is
-   encrypted-to-Bob throughout.
-2. The referee NEVER holds Alice's `s_A_refund` at all. Alice keeps it
-   local; the referee only contributes its own `s_R_refund`.
+1. Alice's `s_A_settle` is submitted to the referee only as ciphertext
+   addressed to Bob's PGP pubkey. The recipient pubkey is Bob's; the
+   referee receives ciphertext and forwards ciphertext.
+2. Alice's `s_A_refund` is never submitted to the referee in any form.
+   The referee only contributes its own `s_R_refund`.
 3. The referee's two secret nonces (`secnonce_S_R`, `secnonce_R_R`) are
    per-session and discarded after partial-signing. The trait
    `Musig2Signer` exposes `discard_session(swap_id, session)` for
@@ -89,18 +92,18 @@ Restated from `referee-zkp-based-swap.md §5`:
 ## Why the referee can't recover Alice's secret
 
 For nonce-reuse / Wagner-style key recovery against MuSig2, an attacker
-would need:
-
-- two of Alice's partial-sigs, in cleartext
-- with their corresponding pubnonces visible
-- where the underlying secnonces overlap
+would need both of Alice's partial-sigs (settle and refund) at the same
+time, with their corresponding pubnonces, where the underlying
+secnonces overlap.
 
 In our protocol:
 
-- The referee never sees `s_A_settle` cleartext (encrypted-to-Bob).
-- The referee never sees `s_A_refund` at all.
-- Even Bob (who decrypts `s_A_settle`) never sees `s_A_refund`, and
-  vice versa for Alice on the abort path.
+- The `s_A_settle` Alice gives the referee is ciphertext addressed to
+  Bob; the referee never sees plaintext.
+- `s_A_refund` is never given to the referee in any form.
+- Bob receives `s_A_settle` (via the encrypted-to-Bob blob) but never
+  receives `s_A_refund`. Alice receives `s_A_refund` (locally) but does
+  not give `s_A_settle` to the abort path.
 
 The only party that ever holds **both** of Alice's partial-sigs is
 Alice. The pubnonces are public (audit log) but pubnonces alone are

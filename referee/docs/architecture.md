@@ -7,18 +7,19 @@ swaps** (`webycash-server/docs/referee-zkp-based-swap.md` §4). Webcash
 transfers a *secret*; ARK transfers a *signature*. Neither rail has a
 primitive the other understands. The referee glues them together by:
 
-1. Verifying both parties' encrypted payloads via Groth16 ZKPs **without
-   ever decrypting them**.
+1. Verifying both parties' encrypted payloads via Groth16 ZKPs against
+   the public hashes committed to in the audit chain.
 2. Calling webcash.org's `/api/v1/health_check` to pre-check (`H_B`
    unspent before insert) and post-check (`H_B` spent after insert).
 3. Co-signing the 2-of-2 MuSig2 vtxo so Bob can claim it on success, and
    so Alice can refund it on failure.
 4. Emitting a public, signed audit log of every action it takes.
 
-It is **non-custodial**. It never holds Alice's `TX_settle` MuSig2
-partial-sig in cleartext, never holds her `TX_refund` partial-sig at all,
-and never holds Bob's webcash secret in cleartext. The only secrets it
-owns are its own Ed25519 identity key and its own MuSig2 key share.
+It is **non-custodial**. The encrypted payloads are addressed to the
+counterparty's PGP pubkey; the referee receives only ciphertext and
+forwards only ciphertext. The ZKPs prove honesty against the public
+commitments. The only secrets the referee owns are its own Ed25519
+identity key and its own MuSig2 key share.
 
 ## Components
 
@@ -175,7 +176,9 @@ The "data becomes, doesn't move" directive applies throughout:
 - `SwapState<P>` is `Clone + Serialize`; transitions consume the prior
   value and return a new one.
 - `PgpEncrypted<T>` is a newtype — referee holds `Vec<u8>` + a phantom
-  marker recording what the cleartext *would be*; never decrypts.
+  marker recording what the recipient will recover from it. The phantom
+  is a type-system tag for routing the right ciphertext to the right
+  push, not a hint that the referee could ever access the contents.
 - The audit log appends entries; never modifies them.
 - The push transport is a trait method that takes `&self` + `&PushRequest`
   — the request is never mutated by the transport.

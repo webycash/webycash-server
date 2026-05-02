@@ -199,8 +199,8 @@ pub trait Asset: Send + Sync + 'static {
 }
 
 /// Assets whose units can be split or merged: Webcash, RGB20, ALL Vouchers.
-/// RGB21 NFTs do NOT implement this — `/api/v1/replace` is statically
-/// unavailable on the RGB21 binary.
+/// RGB21 does NOT implement this — `/api/v1/replace` (the splittable
+/// shape) is statically unavailable on the RGB21 binary.
 pub trait SplittableAsset: Asset {
     /// Atomic-unit amount carried by the secret.
     fn amount(secret: &Self::Secret) -> Amount;
@@ -209,7 +209,7 @@ pub trait SplittableAsset: Asset {
     fn amount_public(public: &Self::Public) -> Amount;
 }
 
-/// Assets that move 1:1 between owners (no split): RGB21 NFTs.
+/// Assets that move 1:1 between owners (no split): RGB21.
 pub trait TransferableAsset: Asset {
     /// Validate a transfer (asset-specific, e.g., AluVM transition for RGB21).
     fn validate_transfer(input: &Self::Secret, output: &Self::Secret) -> Result<()>;
@@ -339,7 +339,7 @@ pub trait RecordBuilder: SplittableAsset {
     }
 }
 
-/// Analog of `RecordBuilder` for non-splittable / collectible (NFT) assets.
+/// Analog of `RecordBuilder` for non-splittable / collectible assets (RGB21).
 /// `RgbCollectible` implements this; the collectible `/api/v1/replace`
 /// handler (1:1 arity) uses it instead of the splittable variant.
 pub trait CollectibleRecordBuilder: TransferableAsset {

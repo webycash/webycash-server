@@ -42,8 +42,8 @@ elsewhere is a precision break.
 | `License`, `Royalties License`, `Perpetual License` | Harmoniis's domain term for their RGB21-issued contracts. A Harmoniis convention layered on top of RGB21 — never appears in webylib library code. | Harmoniis-domain docs only |
 | `referee` | Our service for **Webcash ↔ Bitcoin ARK** swaps. Holds no custody. Co-signs the ARK 2-of-2 vtxo and orchestrates the encrypted-payload exchange. | This doc, `referee` crate |
 | `extronet` | Decentralized contract publishing and discovery network. Out of scope to build; webylib ships a thin client. | This doc, future `extronet-client` crate |
-| `insert_hook(pgp_pub, encrypted_payload, type)` | Webylib function the referee remote-calls (via push) on a recipient's PWA. Webylib never sees cleartext; the wallet implementor's PGP private key decrypts locally. | Webylib API |
-| `invalidate_hook(public_hash)` | Webylib function the referee remote-calls on the *original holder* during abort: the holder's wallet `/replaces` the matching secret to a fresh self-owned secret, neutralising any cleartext that may have leaked. | Webylib API |
+| `insert_hook(pgp_pub, encrypted_payload, type)` | Webylib function the referee remote-calls (via push) on a recipient's PWA. The recipient's wallet recovers the payload locally with its own PGP private key; webylib never holds plaintext. | Webylib API |
+| `invalidate_hook(public_hash)` | Webylib function the referee remote-calls on the *original holder* during abort: the holder's wallet `/replaces` the matching secret to a fresh self-owned one, neutralising any leaked secret. | Webylib API |
 | **Banned** | `NFT`, `bond`, `arbiter`, `matchmaker`, `witness server`. Never use these. | — |
 
 ## §2. Trust model
@@ -75,8 +75,10 @@ and fully programmable. ARK has native HTLC and taproot multisig.
 ## §4. Referee-ZKP-based swap — Webcash ↔ Bitcoin ARK
 
 This is the **only flow that uses the referee**. The referee verifies both parties'
-ciphertexts via Groth16 ZKPs (§9) without ever decrypting them, orchestrates the
-encrypted-payload exchange, and co-signs the 2-of-2 MuSig2 vtxo. Settlement is
+ciphertexts via Groth16 ZKPs (§9) — the ciphertexts are addressed to the
+counterparty's PGP pubkey, so only the recipient ever sees plaintext. The referee
+orchestrates the encrypted-payload exchange and co-signs the 2-of-2 MuSig2 vtxo.
+Settlement is
 **race-bounded, not cryptographically atomic** (see §4.5). The referee is non-custodial
 by construction (§5).
 
@@ -101,13 +103,13 @@ referee complete two nonce-exchange rounds at swap init: one for `TX_settle`, on
 Alice produces:
 
 - `EncSig_A_to_B` = `PGP_encrypt(Bob_pgp_pubkey, alice_partial_sig_on_TX_settle)`
-- `ZKP_A` = Groth16 proof to the **referee** that `EncSig_A_to_B` decrypts under `Bob_pgp_privkey` to a valid MuSig2 partial-sig by Alice on `TX_settle`, against Alice's published MuSig2 pubkey-share. The referee verifies this proof; **neither Alice nor Bob is the verifier**.
+- `ZKP_A` = Groth16 proof to the **referee** that `EncSig_A_to_B` is a well-formed encryption to `Bob_pgp_pubkey` of a valid MuSig2 partial-sig by Alice on `TX_settle`, against Alice's published MuSig2 pubkey-share. The referee verifies this proof; **neither Alice nor Bob is the verifier**.
 - `alice_partial_sig_on_TX_refund` — held strictly locally by Alice. Never given to the referee, never given to Bob. (See §5 for why.)
 
 Bob produces:
 
 - `EncSec_B_to_A` = `PGP_encrypt(Alice_pgp_pubkey, S_B)`
-- `ZKP_B` = Groth16 proof to the **referee** that `EncSec_B_to_A` decrypts under `Alice_pgp_privkey` to a 32-byte value `S` with `sha256(S) == H_B`, where `H_B` is the public hash the referee independently checked unspent at webcash.org.
+- `ZKP_B` = Groth16 proof to the **referee** that `EncSec_B_to_A` is a well-formed encryption to `Alice_pgp_pubkey` of a 32-byte value `S` with `sha256(S) == H_B`, where `H_B` is the public hash the referee independently checked unspent at webcash.org.
 
 Both payloads + both ZKPs go to the referee via authenticated HTTPS.
 
@@ -117,9 +119,9 @@ The referee runs (all immutable steps; each produces a new typestate value, neve
 
 1. **Verify** `ZKP_A` and `ZKP_B`. If either fails: abort, return signed receipt to both parties.
 2. **Pre-check**: `webcash.org/api/v1/health_check([H_B])` returns `unspent`. Persist signed snapshot.
-3. **Insert push**: invoke the configured push-webhook with `{ pgp_fp: Alice_fp, encrypted_payload: EncSec_B_to_A, type: "webcash", swap_id, callback_url }`. The push-notification service is **external** (§4.6) — the referee just calls a webhook. The push service is responsible for delivering to Alice's PWA. Alice's PWA service-worker receives the push and calls webylib's `insert_hook(Alice_pgp_pub, EncSec_B_to_A, type=webcash)`. The wallet implementor decrypts locally with Alice's PGP private key, recovers `S_B`, and immediately submits its own `/replace` to webcash.org transferring `H_B` to a fresh Alice-owned secret.
+3. **Insert push**: invoke the configured push-webhook with `{ pgp_fp: Alice_fp, encrypted_payload: EncSec_B_to_A, type: "webcash", swap_id, callback_url }`. The push-notification service is **external** (§4.6) — the referee just calls a webhook. The push service is responsible for delivering to Alice's PWA. Alice's PWA service-worker receives the push and calls webylib's `insert_hook(Alice_pgp_pub, EncSec_B_to_A, type=webcash)`. The wallet implementor recovers `S_B` locally with Alice's PGP private key and immediately submits its own `/replace` to webcash.org transferring `H_B` to a fresh Alice-owned secret.
 4. **Post-check**: `webcash.org/api/v1/health_check([H_B])` returns `spent` ⟹ Alice took ownership ⟹ swap **success**.
-5. **Release to Bob**: referee transmits to Bob `(referee_partial_sig_on_TX_settle, EncSig_A_to_B)` over the same push channel. Bob's wallet decrypts `EncSig_A_to_B` with Bob's PGP private key, recovers `alice_partial_sig_on_TX_settle`, MuSig2-aggregates with `referee_partial_sig_on_TX_settle`, broadcasts `TX_settle` on ARK, claims the vtxo. **The referee at no point holds Alice's signature in cleartext — `EncSig_A_to_B` is forwarded as opaque bytes.**
+5. **Release to Bob**: referee transmits to Bob `(referee_partial_sig_on_TX_settle, EncSig_A_to_B)` over the same push channel. Bob's wallet recovers `alice_partial_sig_on_TX_settle` from `EncSig_A_to_B` with his PGP private key, MuSig2-aggregates with `referee_partial_sig_on_TX_settle`, broadcasts `TX_settle` on ARK, claims the vtxo. **The referee never holds Alice's signature in plaintext — `EncSig_A_to_B` is addressed to Bob and the referee forwards it as opaque bytes.**
 
 ### 4.4. Failure handling
 
@@ -130,8 +132,8 @@ with exponential backoff.
 
 If 3 retries still see `unspent`, the swap **aborts**:
 
-1. Referee invokes the push-webhook with `{ pgp_fp: Bob_fp, public_hash: H_B, type: "invalidate-webcash", swap_id, callback_url }`. Bob's PWA receives the push and calls webylib's `invalidate_hook(H_B)`. The wallet finds the matching secret in Bob's local store and `/replaces` it to a fresh Bob-owned secret. Even if `S_B` cleartext leaked at any point, it's now spent and worthless.
-2. Once Bob's wallet acks the invalidation (signed receipt), referee transmits to Alice `referee_partial_sig_on_TX_refund` (cleartext — Alice is the recipient). Alice MuSig2-aggregates with her locally-held `alice_partial_sig_on_TX_refund`, broadcasts `TX_refund`, vtxo returns to Alice.
+1. Referee invokes the push-webhook with `{ pgp_fp: Bob_fp, public_hash: H_B, type: "invalidate-webcash", swap_id, callback_url }`. Bob's PWA receives the push and calls webylib's `invalidate_hook(H_B)`. The wallet finds the matching secret in Bob's local store and `/replaces` it to a fresh Bob-owned secret. Even if `S_B` was already recovered by Alice at any point, the on-chain hash is now spent and the prior secret no longer redeemable.
+2. Once Bob's wallet acks the invalidation (signed receipt), referee transmits to Alice `referee_partial_sig_on_TX_refund` directly (Alice is the recipient). Alice MuSig2-aggregates with her locally-held `alice_partial_sig_on_TX_refund`, broadcasts `TX_refund`, vtxo returns to Alice.
 
 ### 4.5. The race window we accept
 
@@ -147,8 +149,8 @@ We accept this risk because:
 
 - The window is the time between pre-check and Alice's `/replace` landing — typically
   hundreds of milliseconds with a co-located referee.
-- Alice's PWA has the `/replace` payload pre-built; only the decryption step is on the
-  critical path after the push lands.
+- Alice's PWA has the `/replace` payload pre-built; only the local payload-recovery
+  step is on the critical path after the push lands.
 - Bob's only attack window is the same; he has no time advantage.
 - Loss is bounded to the webcash side. Alice's vtxo is never at risk because it's
   locked behind the 2-of-2 multisig.
@@ -187,27 +189,33 @@ operational concern.
 The cryptographic non-custody property of the referee is enforced by **two invariants
 that hold across every step of every swap**:
 
-1. **The referee never holds Alice's `TX_settle` partial-sig in cleartext.**
-   Alice gives it encrypted to Bob's PGP pubkey. The referee can verify (via Alice's
-   ZKP) that the ciphertext is honest, but cannot decrypt it.
-2. **The referee never holds Alice's `TX_refund` partial-sig at all.**
-   Alice keeps it strictly local.
+1. **Alice's `TX_settle` partial-sig is encrypted to Bob.**
+   Alice's submission to the referee is `EncSig_A_to_B`. The recipient pubkey is
+   Bob's; the referee receives ciphertext only and verifies the Groth16 ZKP that
+   the ciphertext is well-formed against the public commitments. Plaintext is
+   addressed to Bob.
+2. **Alice's `TX_refund` partial-sig stays local.**
+   It is never submitted to the referee in any form.
 
 Both invariants are required under MuSig2's threat model. MuSig2 partial-sigs share
-a per-session nonce; if the referee held Alice's TX_settle partial *and* TX_refund
-partial at the same time in cleartext, with their corresponding nonces, the referee
-could recover Alice's MuSig2 private-share via standard nonce-reuse algebra. The
-encrypted-to-Bob blob protects invariant (1); strict locality protects invariant (2).
+a per-session nonce; if the referee somehow obtained Alice's `TX_settle` partial *and*
+`TX_refund` partial at the same time, with their corresponding nonces, Alice's
+MuSig2 private-share would be recoverable via standard nonce-reuse algebra. Encrypting
+the `TX_settle` partial to Bob blocks one half; strict locality of the `TX_refund`
+partial blocks the other.
 
 Symmetrically for Bob's webcash secret:
 
-3. **The referee never holds `S_B` in cleartext.**
-   Bob gives it encrypted to Alice's PGP pubkey. The ZKP attests honesty without revealing `S_B`.
+3. **Bob's webcash secret `S_B` is encrypted to Alice.**
+   Bob's submission to the referee is `EncSec_B_to_A`. The recipient pubkey is
+   Alice's; the referee receives ciphertext only. The Groth16 ZKP attests that the
+   ciphertext encrypts a value `S` with `sha256(S) == H_B` (the public hash already
+   committed in the audit chain).
 
 These three invariants are checked in code (typestate transitions in §10 forbid
 constructing any state that would violate them). They are also checked by the audit
 log: every signed message the referee emits commits to the *ciphertext bytes it
-forwarded*, not to any cleartext.
+forwarded*, not to any plaintext payload.
 
 ## §6. Webcash ↔ Voucher — out of scope
 
@@ -250,14 +258,15 @@ mechanism as §4, **decoupled from the HTLC preimage**.
 | 1 | Alice | RGB server | `/replace` + `htlc_locks`: lock her RGB asset with `committed_h=H, claim_owner=Bob, refund_owner=Alice, refund_after_seconds_from_now=1800`. |
 | 2 | Both | local | WASM-AluVM verify lock parameters. |
 | 3 | Bob | RGB server | `/replace` + `htlc_witnesses`: `provided_x_hex=X`. AluVM accepts; Bob owns the RGB asset. **`X` is now public on the RGB audit log.** |
-| 4 | Alice | local + webcash.org | Push delivers `EncSec_B_to_A` to Alice's PWA via `insert_hook(Alice_pgp_pub, EncSec_B_to_A, type=webcash)`. PWA decrypts with Alice's PGP **private key** (NOT `X`), recovers `S_B`, races a `/replace` to webcash.org. |
+| 4 | Alice | local + webcash.org | Push delivers `EncSec_B_to_A` to Alice's PWA via `insert_hook(Alice_pgp_pub, EncSec_B_to_A, type=webcash)`. PWA recovers `S_B` locally with Alice's PGP **private key** (NOT `X`) and races a `/replace` to webcash.org. |
 
 Critical decoupling: **`X` (the HTLC preimage) is independent of the webcash secret
 encryption.** The original §4.D scheme that derived the webcash AES key from `X` was
 broken — once Bob revealed `X` in step 3, the audit log made the webcash secret
 extractable by anyone watching the RGB server. Under the corrected scheme, `X` only
 gates the RGB transition; the webcash secret is encrypted to Alice's PGP pubkey
-end-to-end and only Alice's PGP private key (held in her PWA) can decrypt it.
+end-to-end so the recipient pubkey is Alice's and the plaintext only ever exists in
+her PWA after local recovery.
 
 The race window in step 4 is the same race-with-pre-armed-wallet as §4.5 — bounded,
 documented, accepted.

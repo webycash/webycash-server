@@ -11,14 +11,15 @@
 //! webcash; Alice holds a Bitcoin ARK vtxo. Webcash transfers a *secret*;
 //! ARK transfers a *signature*. Neither rail has a primitive the other
 //! understands. The referee glues them together by (a) verifying both
-//! parties' encrypted payloads via Groth16 ZKPs without ever decrypting
-//! them, (b) calling the webcash server to confirm Bob's leg moved, and
-//! (c) co-signing the 2-of-2 MuSig2 vtxo so Bob can claim it. The referee
-//! is **non-custodial** — it never holds Alice's TX_settle partial-sig in
-//! cleartext, never holds her TX_refund partial-sig at all, and never holds
-//! Bob's webcash secret in cleartext. The only secret it owns is its own
-//! Ed25519 identity key (for signed audit log + webhook auth) and its own
-//! MuSig2 key-share. See `docs/trust-model.md`.
+//! parties' encrypted payloads via Groth16 ZKPs against the public hashes
+//! committed in the audit chain, (b) calling the webcash server to confirm
+//! Bob's leg moved, and (c) co-signing the 2-of-2 MuSig2 vtxo so Bob can
+//! claim it. The referee is **non-custodial**: every encrypted payload is
+//! addressed to the counterparty's PGP pubkey, so the referee receives and
+//! forwards ciphertext only. Alice's `TX_refund` partial-sig is never
+//! submitted to the referee at all. The only secret the referee owns is
+//! its own Ed25519 identity key (for signed audit log + webhook auth) and
+//! its own MuSig2 key-share. See `docs/trust-model.md`.
 //!
 //! ## Module map
 //!
@@ -48,9 +49,9 @@
 //!
 //! ## Cryptographic invariants (enforced at the type level)
 //!
-//! - Alice's `TX_settle` MuSig2 partial-sig is only ever held inside a
-//!   `PgpEncrypted<AlicePartialSig>` newtype — the referee API does not
-//!   accept cleartext signatures from her.
+//! - Alice's `TX_settle` MuSig2 partial-sig is only ever carried inside a
+//!   `PgpEncrypted<AlicePartialSig>` newtype — the referee API only accepts
+//!   it as ciphertext addressed to Bob's PGP pubkey.
 //! - Alice's `TX_refund` MuSig2 partial-sig is **never** transmitted to
 //!   the referee; it is local to her wallet.
 //! - Bob's webcash secret `S_B` is only ever held inside a

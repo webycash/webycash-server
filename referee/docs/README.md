@@ -2,9 +2,9 @@
 
 The `referee` binary mediates **Webcash ↔ Bitcoin ARK** swaps using a
 non-custodial protocol: both parties' encrypted payloads are verified
-via Groth16 ZKPs without ever being decrypted by the referee, MuSig2
-2-of-2 partial-signatures gate vtxo settlement and refund, and every
-phase transition is committed to a public signed audit log.
+via Groth16 ZKPs against the public hashes the audit chain commits to,
+MuSig2 2-of-2 partial-signatures gate vtxo settlement and refund, and
+every phase transition is committed to a public signed audit log.
 
 The protocol it implements is fully specified in
 [`webycash-server/docs/referee-zkp-based-swap.md`](../../docs/referee-zkp-based-swap.md)

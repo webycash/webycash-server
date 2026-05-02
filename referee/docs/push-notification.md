@@ -80,20 +80,21 @@ refunds only fire after Bob provably acked the invalidation.
 ### `insert`
 
 `payload_b64` is base64 of the opaque PGP ciphertext addressed to
-`recipient_pgp_fp`. The recipient wallet decrypts with its PGP private
-key and calls webylib's `insert_hook` (see `docs/hook-contract.md`).
+`recipient_pgp_fp`. The recipient wallet recovers the payload locally
+with its PGP private key and calls webylib's `insert_hook` (see
+`docs/hook-contract.md`).
 
-For Webcash↔ARK swaps, the cleartext is a webcash secret. For future
-swap shapes, the cleartext type is determined by the type tag inside
-the recipient's `insert_hook` implementation.
+For Webcash↔ARK swaps, the recovered payload is a webcash secret. For
+future swap shapes, the payload type is determined by the type tag
+inside the recipient's `insert_hook` implementation.
 
 ### `invalidate`
 
 `payload_b64` is base64 of the public hash to invalidate (UTF-8 hex,
 typically 64 ASCII characters). The recipient wallet calls webylib's
 `invalidate_hook(public_hash)` to atomically `/replace` the matching
-secret in its local store to a fresh self-owned secret. This makes any
-leaked cleartext worthless going forward.
+secret in its local store with a fresh self-owned one. This makes any
+prior copy of the secret no longer redeemable.
 
 ### `release-settle`
 

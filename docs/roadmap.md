@@ -11,7 +11,7 @@ listed in detail under "Gated on" below.
 | Capability | Status |
 |---|---|
 | `webycash-server-webcash` (Webcash wire-protocol-frozen) | **Ship.** Conformance suite green against webcash.org behaviour. |
-| `webycash-server-rgb` (RGB20 fungibles + AluVM-validated `replace`) | **Ship.** Asset-rgb HTLC primitive with witness/timeout-refund covered by 5-test conformance suite. |
+| `webycash-server-rgb` (RGB20 + AluVM-validated `replace`) | **Ship.** Asset-rgb HTLC primitive with witness/timeout-refund covered by 5-test conformance suite. |
 | `webycash-server-rgb-collectible` (RGB21) | **Ship.** Same HTLC machinery as RGB20; 5-test conformance suite (`server_rgb21_htlc.rs`) green. |
 | `webycash-server-voucher` (issuer-namespaced bearer credits) | **Ship.** |
 | `webylib` (Webcash + RGB client surface, HTLC `replace_with_htlc`) | **Ship.** End-to-end tests against compose stack green for RGB20 and RGB21. |

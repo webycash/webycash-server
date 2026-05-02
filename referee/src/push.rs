@@ -30,14 +30,16 @@ pub enum PushKind {
     Insert,
     /// Recipient should call webylib's `invalidate_hook` for the
     /// attached `public_hash` — typically Bob being asked to invalidate
-    /// his now-leaked webcash secret on the abort path.
+    /// the webcash secret on the abort path so any prior copies are no
+    /// longer redeemable.
     Invalidate,
     /// Settlement payload — the referee's own MuSig2 partial-sig plus
     /// the encrypted-to-Bob blob containing Alice's partial-sig. Bob's
-    /// wallet decrypts Alice's sig and aggregates with the referee's.
+    /// wallet recovers Alice's signature locally and aggregates with the
+    /// referee's.
     ReleaseSettle,
     /// Refund payload — the referee's MuSig2 partial-sig on `TX_refund`
-    /// to Alice (cleartext; she's the recipient).
+    /// addressed to Alice (she's the recipient).
     ReleaseRefund,
 }
 

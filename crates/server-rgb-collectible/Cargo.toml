@@ -1,6 +1,6 @@
 [package]
 name = "webycash-server-rgb-collectible"
-description = "RGB21 (collectible / NFT) flavor of the asset-gated server. Non-splittable; /replace enforces 1:1 transfer with amount equality."
+description = "RGB21 (collectible) flavor of the asset-gated server. Non-splittable; licensable as Perpetual or Royalties License. /replace enforces 1:1 transfer."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

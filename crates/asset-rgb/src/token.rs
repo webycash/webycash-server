@@ -2,11 +2,12 @@
 //!
 //! Two flavors share this module:
 //!
-//! - **RGB20 fungible** (splittable):
+//! - **RGB20** (splittable, fungible):
 //!   `e{amount}:secret:{hex64}:{contract_id}:{issuer_pgp_fp}`
 //!   `e{amount}:public:{sha256_hex}:{contract_id}:{issuer_pgp_fp}`
 //!
-//! - **RGB21 NFT** (non-splittable, no amount segment):
+//! - **RGB21** (non-splittable, licensable: Perpetual or Royalties
+//!   License — no amount segment):
 //!   `secret:{hex64}:{contract_id}:{issuer_pgp_fp}`
 //!   `public:{sha256_hex}:{contract_id}:{issuer_pgp_fp}`
 //!
@@ -27,10 +28,10 @@ use webycash_asset_core::{Amount, ContractId, PgpFingerprint};
 use webycash_proto::parsers::{amount_parser, hex64};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RGB20 fungible (splittable)
+// RGB20 (splittable, fungible)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// RGB20 fungible secret: `e{amount}:secret:{hex64}:{contract}:{fp}`.
+/// RGB20 secret: `e{amount}:secret:{hex64}:{contract}:{fp}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecretFungible {
     /// Token amount in atomic units.
@@ -43,7 +44,7 @@ pub struct SecretFungible {
     pub issuer_fp: PgpFingerprint,
 }
 
-/// RGB20 fungible public form: `e{amount}:public:{sha256_hex}:{contract}:{fp}`.
+/// RGB20 public form: `e{amount}:public:{sha256_hex}:{contract}:{fp}`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PublicFungible {
     /// Token amount in atomic units.
@@ -68,7 +69,7 @@ impl SecretFungible {
         }
     }
 
-    /// Parse an RGB20 fungible secret from its wire form:
+    /// Parse an RGB20 secret from its wire form:
     /// `e{amount}:secret:{64-hex}:{contract_id}:{issuer_fp}`.
     ///
     /// ```
@@ -88,7 +89,7 @@ impl SecretFungible {
 }
 
 impl PublicFungible {
-    /// Parse a public RGB20 fungible token from its wire form.
+    /// Parse a public RGB20 token from its wire form.
     pub fn parse(s: &str) -> Result<Self, TokenError> {
         Self::from_str(s)
     }
@@ -139,7 +140,7 @@ impl FromStr for PublicFungible {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RGB21 NFT (non-splittable; no amount segment)
+// RGB21 (non-splittable, licensable; no amount segment)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// RGB21 collectible secret: `secret:{hex64}:{contract_id}:{issuer_fp}`.

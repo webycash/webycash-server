@@ -202,7 +202,7 @@ where
     }
 }
 
-/// Variant for non-splittable / collectible asset flavors (RGB21 NFT).
+/// Variant for non-splittable / collectible asset flavors (RGB21).
 /// Exposes the same endpoint surface as the splittable flavors —
 /// every write goes through `/api/v1/replace` — but the handler
 /// enforces a 1:1 arity (single input → single output, same
@@ -1040,7 +1040,7 @@ mod handlers {
 
     /// `POST /api/v1/replace` — non-splittable variant.
     ///
-    /// Replace ONE secret with ONE new secret (RGB21 NFT). Servers
+    /// Replace ONE secret with ONE new secret (RGB21). Servers
     /// always replace secrets; the non-splittable case is a 1:1
     /// constrained replace (no amount conservation, exactly one input,
     /// exactly one output). Same wire shape as the splittable replace
@@ -1169,7 +1169,7 @@ mod handlers {
             id: uuid::Uuid::new_v4().to_string(),
             input_hashes: vec![input_hash.clone()],
             output_hashes: vec![output_hash],
-            total_amount_wats: 0, // NFTs have no fungible amount
+            total_amount_wats: 0, // RGB21 records carry no fungible amount
             created_at: chrono::Utc::now(),
         };
         let op = ReplaceOp {

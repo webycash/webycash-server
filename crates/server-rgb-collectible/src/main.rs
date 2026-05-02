@@ -1,4 +1,5 @@
-//! RGB21 collectible (NFT) flavor binary.
+//! RGB21 collectible flavor binary (non-splittable, licensable —
+//! Perpetual or Royalties License).
 //!
 //! Boots `Server<RgbCollectible, S>` and dispatches via
 //! `serve_collectible()` in server-core. Same endpoint surface as the

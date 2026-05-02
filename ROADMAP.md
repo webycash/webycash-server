@@ -56,7 +56,7 @@ build time. See CHANGELOG `[Unreleased]` for full details.
 
 ### Asset implementations
 - [x] `webycash-asset-webcash` (frozen against webcash.org production)
-- [x] `webycash-asset-rgb` (RGB20 fungible + RGB21 collectible)
+- [x] `webycash-asset-rgb` (RGB20 + RGB21)
 - [x] `webycash-asset-voucher` (always-splittable bearer credits)
 
 ### Storage

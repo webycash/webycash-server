@@ -85,7 +85,7 @@ flavor's wire-format and storage shape.
 ### Tests
 - **132 lib tests + 9 doctests** across the workspace.
 - **59 property tests** (proptest, 64–2048 cases each):
-  - 14 wire-format parser roundtrips (Webcash, RGB20 fungible, RGB21
+  - 14 wire-format parser roundtrips (Webcash, RGB20, RGB21
     collectible, Voucher) plus cross-flavor disjointness pin.
   - 8 storage-key partitioning invariants (cross-asset uniqueness,
     namespace isolation, role-prefix non-collision, legacy-keys frozen).

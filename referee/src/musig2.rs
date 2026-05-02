@@ -14,10 +14,11 @@
 //!    pair. Reuse is fatal (key recovery). Enforced here by generating
 //!    nonces from a CSPRNG at session creation; secret nonces are zeroed
 //!    on signing.
-//! 2. **No combined-cleartext-partials**: the referee NEVER holds Alice's
-//!    `TX_settle` partial-sig in cleartext (it arrives encrypted to Bob)
-//!    and NEVER holds her `TX_refund` partial-sig at all. The referee
-//!    only ever produces its OWN partial-sig. Combining happens on Bob's
+//! 2. **Asymmetric partials**: Alice's `TX_settle` partial-sig is
+//!    submitted to the referee as ciphertext addressed to Bob's PGP
+//!    pubkey, so only Bob ever sees plaintext. Her `TX_refund`
+//!    partial-sig is never submitted to the referee at all. The referee
+//!    only produces its own partial-sigs. Combining happens on Bob's
 //!    side (settlement) or Alice's side (refund).
 //! 3. **Session-binding**: every partial-sig is bound to a specific
 //!    session id; replay across sessions is rejected.

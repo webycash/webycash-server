@@ -23,42 +23,44 @@ Auditors can re-verify the chain and the embedded ZKPs after the fact.
 
 ## Why the referee can't steal — invariant by invariant
 
-### Invariant 1: referee never holds Alice's `TX_settle` partial-sig in cleartext
+### Invariant 1: Alice's `TX_settle` partial-sig is encrypted to Bob
 
-Alice encrypts her `s_A_settle` to Bob's PGP pubkey before submitting it
-to `/v1/swap/initiate`. The Groth16 ZKP proves the ciphertext is honest
-without revealing `s_A_settle`. The referee verifies the proof, stores
-the ciphertext in [`PgpEncrypted<AliceTxSettlePartialSig>`] (a newtype
-that doesn't expose decryption methods), and forwards it as opaque
-bytes inside the `release-settle` push.
+Alice's `s_A_settle` is encrypted to Bob's PGP pubkey before being
+submitted to `/v1/swap/initiate`. The referee receives ciphertext only;
+the recipient pubkey is Bob's. The Groth16 ZKP proves the ciphertext is
+a well-formed encryption of a valid MuSig2 partial-signature against
+the public commitments in the audit chain. The referee stores the
+bytes in [`PgpEncrypted<AliceTxSettlePartialSig>`] and forwards them
+unmodified inside the `release-settle` push.
 
-If the referee tried to broadcast `TX_settle` itself, it would need
-Alice's cleartext `s_A_settle` to MuSig2-aggregate with its own
-partial-sig. It does not have it. End of story.
+For the referee to broadcast `TX_settle` itself it would need the
+plaintext `s_A_settle` to MuSig2-aggregate with its own partial-sig.
+The plaintext is addressed to Bob, not the referee.
 
-### Invariant 2: referee never holds Alice's `TX_refund` partial-sig
+### Invariant 2: `TX_refund` partial-sig stays local to Alice
 
-Alice keeps `s_A_refund` strictly local. It is never submitted to the
-referee in any form. The referee's `release-refund` push contains only
-the referee's own partial-sig; Alice combines it with her local
-partial-sig to produce the final aggregate.
+`s_A_refund` is never submitted to the referee in any form. The
+`release-refund` push the referee dispatches contains only the
+referee's own partial-sig; Alice aggregates it with her local
+partial-sig to produce the final signature.
 
-A malicious referee could *refuse* to send `release-refund`. In that
-case Alice's vtxo stays in the 2-of-2; she can wait for the on-chain
-HTLC timeout (which we engineer Alice's vtxo to have natively per
-ARK's script paths) and refund unilaterally without referee
-cooperation.
+A malicious referee can *refuse* to send `release-refund`. Alice's
+vtxo then stays in the 2-of-2; she waits for the on-chain HTLC
+timeout (engineered into the vtxo's ARK script paths) and refunds
+unilaterally without referee cooperation.
 
-### Invariant 3: referee never holds `S_B` in cleartext
+### Invariant 3: `S_B` is encrypted to Alice
 
-Bob encrypts `S_B` to Alice's PGP pubkey before submitting it to
-`/v1/swap/initiate`. The Groth16 ZKP proves the ciphertext decrypts to
-a 32-byte value with `sha256(S) = H_B`. The referee verifies the
-proof, stores the ciphertext in [`PgpEncrypted<WebcashSecret>`], and
-forwards it as opaque bytes inside the `insert-hook` push.
+Bob's webcash secret `S_B` is encrypted to Alice's PGP pubkey before
+being submitted to `/v1/swap/initiate`. The referee receives
+ciphertext only. The Groth16 ZKP proves the ciphertext encrypts a
+32-byte value `S` with `sha256(S) = H_B` (the public hash that
+appears in the audit chain). The referee stores the bytes in
+[`PgpEncrypted<WebcashSecret>`] and forwards them unmodified inside
+the `insert-hook` push.
 
-A malicious referee could not `/replace` the webcash itself even if it
-wanted to: it has no cleartext.
+A malicious referee cannot `/replace` the webcash on its own behalf:
+the plaintext is addressed to Alice.
 
 ### Invariant 4: every action is publicly auditable
 
@@ -95,8 +97,8 @@ reputational ouster.
 
 | Attempted action | Why it fails |
 |---|---|
-| Steal Bob's webcash | Cleartext `S_B` never reaches the referee |
-| Steal Alice's vtxo | The 2-of-2 + native HTLC ensures she always has the unilateral refund path |
+| Steal Bob's webcash | `S_B` is addressed to Alice's PGP pubkey, not the referee's |
+| Steal Alice's vtxo | The 2-of-2 + native HTLC ensures Alice always has the unilateral refund path |
 | Forge audit entries | Signatures are Ed25519; auditors verify against the pinned pubkey |
 | Run a swap with parameters different from what was committed | The audit log's `init` entry commits to the parameters; any divergence breaks the chain |
 | Reuse a MuSig2 nonce | `Musig2Signer::begin_session` rejects a second begin on the same `(SwapId, Session)` pair |
@@ -108,10 +110,11 @@ These are NOT cryptographic but matter operationally:
 - **Key compromise**: if the referee's Ed25519 identity key leaks, an
   attacker can forge audit entries from that point onward. Mitigated by
   HSM-backed signing in production (key never leaves the HSM).
-- **Postgres compromise**: the referee's swap-state store does not
-  contain secret material (cleartexts, partial-sigs, secret nonces).
-  Compromise reveals which swaps exist + their public parameters; not a
-  fund-loss vector.
+- **Postgres compromise**: the referee's swap-state store contains
+  ciphertext blobs and public parameters only — no plaintext payloads,
+  no partial-sigs, no secret nonces (those live in the `UNLOGGED`
+  table that is wiped on crash). Compromise reveals which swaps exist
+  and their public parameters; not a fund-loss vector.
 - **Push provider compromise**: as above — denial of service, not
   fund theft. Mitigated by HMAC + recipient-ack signatures.
 - **Software supply-chain**: the referee binary is reproducibly built
