@@ -15,8 +15,8 @@
 
 use proptest::prelude::*;
 
-use webycash_asset_core::{ContractId, PgpFingerprint};
-use webycash_storage::{KeyStrategy, Namespace, NamespacedKeys, WebcashLegacyKeys};
+use webycash_server::asset_core::{ContractId, PgpFingerprint};
+use webycash_server::storage::{KeyStrategy, Namespace, NamespacedKeys, WebcashLegacyKeys};
 
 // ─── strategies ────────────────────────────────────────────────────────
 

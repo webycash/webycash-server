@@ -12,11 +12,11 @@ use std::collections::HashMap;
 
 use proptest::prelude::*;
 
-use webycash_asset_core::{ContractId, PgpFingerprint};
-use webycash_asset_rgb::{RgbCollectibleRecord, RgbFungibleRecord, RgbOrigin};
-use webycash_asset_voucher::{VoucherOrigin, VoucherRecord};
-use webycash_asset_webcash::{WebcashOrigin, WebcashRecord};
-use webycash_storage::HashRecord;
+use webycash_server::asset_core::{ContractId, PgpFingerprint};
+use webycash_server::asset_rgb::{RgbCollectibleRecord, RgbFungibleRecord, RgbOrigin};
+use webycash_server::asset_voucher::{VoucherOrigin, VoucherRecord};
+use webycash_server::asset_webcash::{WebcashOrigin, WebcashRecord};
+use webycash_server::storage::HashRecord;
 
 // ─── strategies ────────────────────────────────────────────────────────
 

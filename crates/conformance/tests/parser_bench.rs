@@ -15,9 +15,9 @@
 
 use std::time::Instant;
 
-use webycash_asset_rgb::{SecretCollectible, SecretFungible};
-use webycash_asset_voucher::SecretVoucher;
-use webycash_asset_webcash::SecretWebcash;
+use webycash_server::asset_rgb::{SecretCollectible, SecretFungible};
+use webycash_server::asset_voucher::SecretVoucher;
+use webycash_server::asset_webcash::SecretWebcash;
 
 const ITERATIONS: usize = 100_000;
 const FP: &str = "aabbccddeeff00112233445566778899aabbccdd";

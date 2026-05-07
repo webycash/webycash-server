@@ -12,9 +12,9 @@
 
 use proptest::prelude::*;
 
-use webycash_asset_rgb::{PublicCollectible, PublicFungible, SecretCollectible, SecretFungible};
-use webycash_asset_voucher::{PublicVoucher, SecretVoucher};
-use webycash_asset_webcash::{PublicWebcash, SecretWebcash};
+use webycash_server::asset_rgb::{PublicCollectible, PublicFungible, SecretCollectible, SecretFungible};
+use webycash_server::asset_voucher::{PublicVoucher, SecretVoucher};
+use webycash_server::asset_webcash::{PublicWebcash, SecretWebcash};
 
 fn cases() -> u32 {
     std::env::var("PROPTEST_CASES")
