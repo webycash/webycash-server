@@ -23,13 +23,6 @@ use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
-use hyper::body::Incoming;
-use hyper::service::service_fn;
-use hyper::{Method, Request, Response, StatusCode};
-use hyper_util::rt::{TokioExecutor, TokioIo};
-use hyper_util::server::conn::auto::Builder;
 use crate::asset_core::{
     Amount, Asset, AssetPublic, CollectibleRecordBuilder, IssuedAsset, MintableAsset,
     RecordBuilder, RecordOrigin, SplittableAsset, TransferableAsset,
@@ -40,6 +33,13 @@ use crate::mining::MiningConfig;
 use crate::storage::{
     BurnRecord, HashRecord, LedgerStore, Namespace, ReplaceOp, ReplaceResult, ReplacementRecord,
 };
+use bytes::Bytes;
+use http_body_util::{BodyExt, Full};
+use hyper::body::Incoming;
+use hyper::service::service_fn;
+use hyper::{Method, Request, Response, StatusCode};
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::server::conn::auto::Builder;
 
 const MAX_BODY_BYTES: usize = 1024 * 1024; // 1 MB — matches legacy server
 
@@ -1139,7 +1139,11 @@ mod handlers {
         // requires preimage + correct claim-owner; refund path requires
         // timeout + correct refund-owner. The hook reads the raw body to
         // extract `htlc_witnesses`/`htlc_locks` slots.
-        let input_records_full = match state.store.get_tokens(&ns, &[input_hash.clone()]).await {
+        let input_records_full = match state
+            .store
+            .get_tokens(&ns, std::slice::from_ref(&input_hash))
+            .await
+        {
             Ok(rs) => rs,
             Err(e) => return server_error(&format!("storage: {e}")),
         };
@@ -1161,7 +1165,7 @@ mod handlers {
         // Stamp HTLC lock state onto the output if `htlc_locks` is present
         // — same shape as the fungible flow.
         let mut outputs_slice = std::slice::from_mut(&mut output_record);
-        if let Err(e) = A::augment_output_records(&body, &mut outputs_slice, server_now_unix) {
+        if let Err(e) = A::augment_output_records(&body, outputs_slice, server_now_unix) {
             return server_error(&format!("{e}"));
         }
         let output_hash = output_record.public_hash().to_string();

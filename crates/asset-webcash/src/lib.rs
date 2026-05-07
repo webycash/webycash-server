@@ -19,11 +19,11 @@ pub use token::{PublicWebcash, SecretWebcash, TokenError};
 
 use std::collections::HashMap;
 
-use sha2::{Digest, Sha256};
 use crate::asset_core::{
     Amount, Asset, AssetPublic, AssetRecord, AssetSecret, MintableAsset, RecordBuilder,
     RecordOrigin, ReplaceHook, Result as AssetResult, SplittableAsset,
 };
+use sha2::{Digest, Sha256};
 
 /// In-DB record for a Webcash token. Mirrors the legacy
 /// `webycash_server::db::TokenRecord` field-for-field so the new generic
@@ -166,7 +166,7 @@ impl SplittableAsset for Webcash {
 
 /// Webcash is the canonical non-conditional asset: the server has no hook
 /// to enforce time-locks, preimages, or any predicate beyond conservation
-/// + namespace. The replace hook stays at its default no-op accept; the
+/// and namespace. The replace hook stays at its default no-op accept; the
 /// `webcash.org` protocol freeze guarantees this cannot change.
 impl ReplaceHook for Webcash {}
 

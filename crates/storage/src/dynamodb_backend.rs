@@ -13,10 +13,10 @@
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
+use crate::asset_core::Asset;
 use async_trait::async_trait;
 use aws_sdk_dynamodb::types::{AttributeValue, KeysAndAttributes, TransactWriteItem, WriteRequest};
 use aws_sdk_dynamodb::Client;
-use crate::asset_core::Asset;
 
 use crate::storage::{
     BurnRecord, HashRecord, KeyStrategy, LedgerStore, MiningState, Namespace, ReplaceOp,

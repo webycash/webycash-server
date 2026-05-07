@@ -16,8 +16,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use crate::asset_core::PgpFingerprint;
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
 /// Failure modes from the auth layer (signature verification + nonce
 /// cache). Surfaced by the server's `/api/v1/issue` handler as a 500

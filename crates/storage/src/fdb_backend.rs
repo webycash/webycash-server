@@ -16,10 +16,10 @@
 
 use std::marker::PhantomData;
 
+use crate::asset_core::Asset;
 use async_trait::async_trait;
 use foundationdb::tuple::Subspace;
 use foundationdb::{Database, FdbBindingError, RetryableTransaction};
-use crate::asset_core::Asset;
 
 use crate::storage::{
     BurnRecord, HashRecord, KeyStrategy, LedgerStore, MiningState, Namespace, ReplaceOp,

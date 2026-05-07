@@ -42,7 +42,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 rust-version = "1.91"
 license = "MIT"
@@ -114,7 +114,7 @@ tokio-stream = "0.1"
 proptest = "1"
 
 # Published crates
-webycash-server = { path = ".", version = "0.3.2", default-features = false }
+webycash-server = { path = ".", version = "0.3.3", default-features = false }
 webycash-aluvm-runtime = { path = "crates/aluvm-runtime" }
 
 # Internal crates (workspace-only, not published)

@@ -14,8 +14,8 @@
 
 use std::marker::PhantomData;
 
-use async_trait::async_trait;
 use crate::asset_core::Asset;
+use async_trait::async_trait;
 
 use crate::storage::{
     fdb_backend::FdbStore, redis_backend::RedisStore, BurnRecord, HashRecord, KeyStrategy,

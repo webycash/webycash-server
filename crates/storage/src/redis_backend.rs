@@ -13,9 +13,9 @@
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
+use crate::asset_core::Asset;
 use async_trait::async_trait;
 use redis::AsyncCommands;
-use crate::asset_core::Asset;
 
 use crate::storage::{
     BurnRecord, HashRecord, KeyStrategy, LedgerStore, MiningState, Namespace, ReplaceOp,
