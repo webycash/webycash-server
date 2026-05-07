@@ -8,7 +8,9 @@ use proptest::prelude::*;
 use sha2::{Digest, Sha256};
 
 use webycash_server::asset_core::{Amount, ContractId, PgpFingerprint};
-use webycash_server::asset_rgb::{PublicCollectible, PublicFungible, SecretCollectible, SecretFungible};
+use webycash_server::asset_rgb::{
+    PublicCollectible, PublicFungible, SecretCollectible, SecretFungible,
+};
 use webycash_server::asset_voucher::{PublicVoucher, SecretVoucher};
 use webycash_server::asset_webcash::{PublicWebcash, SecretWebcash};
 
