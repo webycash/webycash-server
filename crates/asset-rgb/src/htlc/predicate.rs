@@ -36,7 +36,7 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::htlc::state::{HtlcState, HtlcWitness};
+use crate::asset_rgb::htlc::state::{HtlcState, HtlcWitness};
 
 /// Verdict produced by [`evaluate`].
 ///
@@ -140,7 +140,7 @@ pub fn evaluate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::htlc::state::sha256_hex_of_ascii;
+    use crate::asset_rgb::htlc::state::sha256_hex_of_ascii;
 
     /// Build a fixture: state with random-looking commitments and a
     /// matching witness for the claim path.

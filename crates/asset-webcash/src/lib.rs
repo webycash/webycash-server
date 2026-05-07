@@ -20,7 +20,7 @@ pub use token::{PublicWebcash, SecretWebcash, TokenError};
 use std::collections::HashMap;
 
 use sha2::{Digest, Sha256};
-use webycash_asset_core::{
+use crate::asset_core::{
     Amount, Asset, AssetPublic, AssetRecord, AssetSecret, MintableAsset, RecordBuilder,
     RecordOrigin, ReplaceHook, Result as AssetResult, SplittableAsset,
 };
@@ -69,7 +69,7 @@ impl AssetRecord for WebcashRecord {}
 
 /// Webcash uses the historical Redis HASH field layout for backwards
 /// compatibility with deployed testnet data.
-impl webycash_storage::HashRecord for WebcashRecord {
+impl crate::storage::HashRecord for WebcashRecord {
     fn public_hash(&self) -> &str {
         &self.public_hash
     }
@@ -142,12 +142,12 @@ impl Asset for Webcash {
 
     fn parse_secret(s: &str) -> AssetResult<Self::Secret> {
         SecretWebcash::parse(s)
-            .map_err(|e| webycash_asset_core::AssetError::Parse(format!("webcash secret: {e}")))
+            .map_err(|e| crate::asset_core::AssetError::Parse(format!("webcash secret: {e}")))
     }
 
     fn parse_public(s: &str) -> AssetResult<Self::Public> {
         PublicWebcash::parse(s)
-            .map_err(|e| webycash_asset_core::AssetError::Parse(format!("webcash public: {e}")))
+            .map_err(|e| crate::asset_core::AssetError::Parse(format!("webcash public: {e}")))
     }
 
     fn to_public(secret: &Self::Secret) -> Self::Public {
@@ -199,7 +199,7 @@ impl MintableAsset for Webcash {
         {
             Ok(())
         } else {
-            Err(webycash_asset_core::AssetError::Invariant(format!(
+            Err(crate::asset_core::AssetError::Invariant(format!(
                 "proof-of-work below target ({} bits)",
                 ctx.difficulty_target_bits
             )))
@@ -213,12 +213,12 @@ impl MintableAsset for Webcash {
     /// the trait).
     fn build_records(ctx: &Self::IssuanceContext) -> AssetResult<Vec<Self::Record>> {
         let pre: MiningPreimageJson = serde_json::from_str(&ctx.preimage)
-            .map_err(|e| webycash_asset_core::AssetError::Parse(format!("preimage JSON: {e}")))?;
+            .map_err(|e| crate::asset_core::AssetError::Parse(format!("preimage JSON: {e}")))?;
 
         let mut records = Vec::with_capacity(pre.webcash.len() + pre.subsidy.len());
         for token in pre.webcash.iter().chain(pre.subsidy.iter()) {
             let secret = SecretWebcash::parse(token).map_err(|e| {
-                webycash_asset_core::AssetError::Parse(format!("mined token {token:?}: {e}"))
+                crate::asset_core::AssetError::Parse(format!("mined token {token:?}: {e}"))
             })?;
             records.push(<Self as RecordBuilder>::record_from_secret(
                 &secret,
@@ -292,7 +292,7 @@ mod tests {
             difficulty_target_bits: 16,
         };
         let err = Webcash::verify_issuance(&ctx).unwrap_err();
-        assert!(matches!(err, webycash_asset_core::AssetError::Invariant(_)));
+        assert!(matches!(err, crate::asset_core::AssetError::Invariant(_)));
     }
 
     /// Find the smallest non-negative integer N for which
@@ -367,7 +367,7 @@ mod tests {
             difficulty_target_bits: 4,
         };
         let err = Webcash::build_records(&ctx).unwrap_err();
-        assert!(matches!(err, webycash_asset_core::AssetError::Parse(_)));
+        assert!(matches!(err, crate::asset_core::AssetError::Parse(_)));
     }
 
     #[test]
@@ -377,7 +377,7 @@ mod tests {
             difficulty_target_bits: 4,
         };
         let err = Webcash::build_records(&ctx).unwrap_err();
-        assert!(matches!(err, webycash_asset_core::AssetError::Parse(_)));
+        assert!(matches!(err, crate::asset_core::AssetError::Parse(_)));
     }
 
     #[test]

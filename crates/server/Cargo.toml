@@ -1,18 +1,19 @@
 [package]
-name = "webycash-server"
+name = "webycash-server-legacy"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Webcash protocol server — open-source e-cash mint with multi-database support"
+description = "Webcash protocol server — open-source e-cash mint with multi-database support (legacy ractor-based monolith)"
+publish = false
 
 [[bin]]
-name = "webycash-server"
+name = "webycash-server-legacy"
 path = "src/main.rs"
 
 [lib]
-name = "webycash_server"
+name = "webycash_server_legacy"
 path = "src/lib.rs"
 
 [features]

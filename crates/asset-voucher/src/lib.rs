@@ -13,7 +13,7 @@ pub use token::{PublicVoucher, SecretVoucher, TokenError};
 
 use std::collections::HashMap;
 
-use webycash_asset_core::{
+use crate::asset_core::{
     Amount, Asset, AssetPublic, AssetRecord, AssetSecret, ContractId, IssuedAsset, MintableAsset,
     PgpFingerprint, RecordBuilder, RecordOrigin, ReplaceHook, Result as AssetResult,
     SplittableAsset,
@@ -67,15 +67,15 @@ pub struct VoucherRecord {
 
 impl AssetRecord for VoucherRecord {}
 
-impl webycash_storage::HashRecord for VoucherRecord {
+impl crate::storage::HashRecord for VoucherRecord {
     fn public_hash(&self) -> &str {
         &self.public_hash
     }
     fn amount_wats(&self) -> i64 {
         self.amount_wats
     }
-    fn namespace(&self) -> webycash_storage::Namespace {
-        webycash_storage::Namespace::scoped(self.contract_id.clone(), self.issuer_fp.clone())
+    fn namespace(&self) -> crate::storage::Namespace {
+        crate::storage::Namespace::scoped(self.contract_id.clone(), self.issuer_fp.clone())
     }
     fn to_fields(&self, fields: &mut HashMap<String, String>) {
         fields.insert("amount_wats".into(), self.amount_wats.to_string());
@@ -150,11 +150,11 @@ impl Asset for Voucher {
 
     fn parse_secret(s: &str) -> AssetResult<Self::Secret> {
         SecretVoucher::parse(s)
-            .map_err(|e| webycash_asset_core::AssetError::Parse(format!("voucher secret: {e}")))
+            .map_err(|e| crate::asset_core::AssetError::Parse(format!("voucher secret: {e}")))
     }
     fn parse_public(s: &str) -> AssetResult<Self::Public> {
         PublicVoucher::parse(s)
-            .map_err(|e| webycash_asset_core::AssetError::Parse(format!("voucher public: {e}")))
+            .map_err(|e| crate::asset_core::AssetError::Parse(format!("voucher public: {e}")))
     }
     fn to_public(secret: &Self::Secret) -> Self::Public {
         secret.to_public()
@@ -205,13 +205,13 @@ impl MintableAsset for Voucher {
         };
         for r in iter {
             if r.contract_id != first.contract_id {
-                return Err(webycash_asset_core::AssetError::Invariant(format!(
+                return Err(crate::asset_core::AssetError::Invariant(format!(
                     "issuance batch crosses contract_id: {} vs {}",
                     first.contract_id, r.contract_id,
                 )));
             }
             if r.issuer_fp != first.issuer_fp {
-                return Err(webycash_asset_core::AssetError::Invariant(format!(
+                return Err(crate::asset_core::AssetError::Invariant(format!(
                     "issuance batch crosses issuer_fp: {} vs {}",
                     first.issuer_fp, r.issuer_fp,
                 )));
@@ -321,7 +321,7 @@ mod tests {
         };
         let err = Voucher::verify_issuance(&ctx).unwrap_err();
         assert!(
-            matches!(&err, webycash_asset_core::AssetError::Invariant(msg) if msg.contains("contract_id")),
+            matches!(&err, crate::asset_core::AssetError::Invariant(msg) if msg.contains("contract_id")),
             "got {err:?}",
         );
     }
@@ -336,7 +336,7 @@ mod tests {
         };
         let err = Voucher::verify_issuance(&ctx).unwrap_err();
         assert!(
-            matches!(&err, webycash_asset_core::AssetError::Invariant(msg) if msg.contains("issuer_fp")),
+            matches!(&err, crate::asset_core::AssetError::Invariant(msg) if msg.contains("issuer_fp")),
             "got {err:?}",
         );
     }

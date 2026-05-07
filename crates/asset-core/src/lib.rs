@@ -39,7 +39,7 @@ impl PgpFingerprint {
     /// `webycash-auth` — this is shape-only.
     ///
     /// ```
-    /// use webycash_asset_core::PgpFingerprint;
+    /// use webycash_server::asset_core::PgpFingerprint;
     /// let fp = PgpFingerprint::parse("aabbccddeeff00112233445566778899aabbccdd").unwrap();
     /// assert_eq!(fp.0.len(), 40);
     ///
@@ -88,7 +88,7 @@ impl ContractId {
     /// (the Voucher shape) both fit inside this superset.
     ///
     /// ```
-    /// use webycash_asset_core::ContractId;
+    /// use webycash_server::asset_core::ContractId;
     /// assert!(ContractId::parse("rgb20-usdc").is_ok());
     /// assert!(ContractId::parse("credits-2026-q1").is_ok());
     /// // empty / over-64 / disallowed punctuation reject

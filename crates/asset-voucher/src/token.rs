@@ -17,8 +17,8 @@ use nom::IResult;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use webycash_asset_core::{Amount, ContractId, PgpFingerprint};
-use webycash_proto::parsers::{amount_parser, hex64};
+use crate::asset_core::{Amount, ContractId, PgpFingerprint};
+use crate::proto::parsers::{amount_parser, hex64};
 
 /// `e{amount}:secret:{hex64}:{contract_id}:{issuer_pgp_fp}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,7 +64,7 @@ impl SecretVoucher {
     /// `e{amount}:secret:{64-hex}:{contract_id}:{issuer_fp}`.
     ///
     /// ```
-    /// use webycash_asset_voucher::SecretVoucher;
+    /// use webycash_server::asset_voucher::SecretVoucher;
     /// let token = format!(
     ///     "e25.0:secret:{}:credits-q1:{}",
     ///     "f".repeat(64),

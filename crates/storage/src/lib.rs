@@ -21,7 +21,7 @@ use std::marker::PhantomData;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use webycash_asset_core::{Asset, ContractId, IssuedAsset, PgpFingerprint};
+use crate::asset_core::{Asset, ContractId, IssuedAsset, PgpFingerprint};
 
 #[cfg(feature = "dynamodb")]
 pub mod dynamodb_backend;

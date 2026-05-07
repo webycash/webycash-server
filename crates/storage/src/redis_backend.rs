@@ -15,9 +15,9 @@ use std::marker::PhantomData;
 
 use async_trait::async_trait;
 use redis::AsyncCommands;
-use webycash_asset_core::Asset;
+use crate::asset_core::Asset;
 
-use crate::{
+use crate::storage::{
     BurnRecord, HashRecord, KeyStrategy, LedgerStore, MiningState, Namespace, ReplaceOp,
     ReplaceResult,
 };

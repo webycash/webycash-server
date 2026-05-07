@@ -5,45 +5,39 @@ resolver = "2"
 # opt-in by explicit -p selection:
 #
 #   cargo build                              → server-webcash (default)
-#   cargo build -p server-rgb                → adds RgbFungible binary
-#   cargo build -p server-rgb-collectible    → adds RgbCollectible binary
-#   cargo build -p server-voucher            → adds Voucher binary
+#   cargo build -p webycash-server-rgb       → adds RgbFungible binary
+#   cargo build -p webycash-server-rgb-collectible → adds RgbCollectible binary
+#   cargo build -p webycash-server-voucher   → adds Voucher binary
 #   cargo build -p referee                   → adds the referee binary
 #                                              (Webcash ↔ ARK swap helper;
 #                                              docs/referee-zkp-based-swap.md §4)
 #   cargo build --workspace                  → builds everything
 #
-# This expresses "default = webcash only; rgb, voucher, referee are opt-in"
-# in idiomatic cargo. Members beyond server-webcash are still in the workspace
-# so they share Cargo.lock, but they are NOT compiled by `cargo build` unless
-# explicitly named.
+# Library sub-crates (proto, asset-core, auth, storage, compute, mining,
+# asset-webcash, asset-rgb, asset-voucher, server-core) are inlined as modules
+# of the root "." crate via #[path] — their Cargo.toml files are deleted so
+# cargo packaging can pick up the source trees.
+# aluvm-runtime is a SEPARATE published crate (webylib WASM client-side only;
+# the server uses pure-Rust HTLC predicates and never runs AluVM).
 default-members = ["crates/server-webcash"]
 
 members = [
-    # Existing
-    "crates/server",
-    "crates/macros",
-
-    # Asset-gated refactor scaffolding (M0)
-    "crates/proto",
-    "crates/asset-core",
-    "crates/asset-webcash",
-    "crates/asset-rgb",
-    "crates/asset-voucher",
-    "crates/auth",
-    "crates/storage",
-    "crates/compute",
-    "crates/mining",
+    # Root published library crate (inlines 10 sub-crate source trees)
+    ".",
+    # Published separately — WASM client-side AluVM runtime for webylib
     "crates/aluvm-runtime",
-    "crates/server-core",
+    # Legacy monolithic server (ractor-based; workspace-only, publish = false)
+    "crates/server",
+    # Proc-macro helper (workspace-only, publish = false)
+    "crates/macros",
+    # Flavor binaries (workspace-only, publish = false)
     "crates/server-webcash",
     "crates/server-rgb",
     "crates/server-rgb-collectible",
     "crates/server-voucher",
+    # Wire-format conformance test suite (workspace-only, publish = false)
     "crates/conformance",
-
-    # Webcash ↔ Bitcoin ARK swap helper (M-5 in plan).
-    # Stub at this milestone; populated in M-5.
+    # Webcash ↔ Bitcoin ARK swap helper (workspace-only, publish = false)
     "referee",
 ]
 
@@ -119,16 +113,106 @@ tokio-stream = "0.1"
 # Testing
 proptest = "1"
 
-# Internal crate paths (workspace members reference each other through these)
-webycash-macros = { path = "crates/macros" }
-webycash-proto = { path = "crates/proto" }
-webycash-asset-core = { path = "crates/asset-core" }
-webycash-asset-webcash = { path = "crates/asset-webcash" }
-webycash-asset-rgb = { path = "crates/asset-rgb" }
-webycash-asset-voucher = { path = "crates/asset-voucher" }
-webycash-auth = { path = "crates/auth" }
-webycash-storage = { path = "crates/storage" }
-webycash-compute = { path = "crates/compute" }
-webycash-mining = { path = "crates/mining" }
+# Published crates
+webycash-server = { path = ".", version = "0.3.1", default-features = false }
 webycash-aluvm-runtime = { path = "crates/aluvm-runtime" }
-webycash-server-core = { path = "crates/server-core" }
+
+# Internal crates (workspace-only, not published)
+webycash-macros = { path = "crates/macros" }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Root published crate (webycash-server library)
+# ─────────────────────────────────────────────────────────────────────────────
+
+[package]
+name = "webycash-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "webycash server library — asset-gated ledger (webcash, RGB, voucher) with Redis/DynamoDB/FDB backends"
+documentation = "https://docs.rs/webycash-server"
+keywords = ["webcash", "payments", "bearer-cash", "rgb", "ledger"]
+categories = ["cryptography::cryptocurrencies", "api-bindings"]
+include = [
+    "src/**/*.rs",
+    "crates/proto/src/**/*.rs",
+    "crates/asset-core/src/**/*.rs",
+    "crates/auth/src/**/*.rs",
+    "crates/storage/src/**/*.rs",
+    "crates/compute/src/**/*.rs",
+    "crates/mining/src/**/*.rs",
+    "crates/asset-webcash/src/**/*.rs",
+    "crates/asset-rgb/src/**/*.rs",
+    "crates/asset-voucher/src/**/*.rs",
+    "crates/server-core/src/**/*.rs",
+    "LICENSE",
+    "README.md",
+]
+
+[lib]
+name = "webycash_server"
+path = "src/lib.rs"
+
+[features]
+default = ["webcash", "redis"]
+webcash = []
+rgb = []
+rgb-runtime = ["rgb", "dep:strict_types"]
+voucher = []
+openpgp = ["dep:pgp"]
+redis = ["dep:redis"]
+dynamodb = ["dep:aws-config", "dep:aws-sdk-dynamodb", "dep:serde_dynamo"]
+fdb = ["dep:foundationdb"]
+redis-fdb = ["redis", "fdb"]
+
+[dependencies]
+# Core shared
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+nom = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+base64 = { workspace = true }
+ed25519-dalek = { workspace = true }
+
+# Server + async
+tokio = { workspace = true }
+ractor = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+toml = { workspace = true }
+bytes = { workspace = true }
+
+# HTTP
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http = { workspace = true }
+http-body-util = { workspace = true }
+
+# Optional: OpenPGP V4 cert parsing in auth module
+pgp = { version = "0.19", optional = true }
+
+# Optional: strict-types for RGB v2 contract schema (rgb-runtime feature)
+strict_types = { version = "2.9", optional = true }
+
+# Optional storage backends
+redis = { workspace = true, optional = true }
+aws-config = { workspace = true, optional = true }
+aws-sdk-dynamodb = { workspace = true, optional = true }
+serde_dynamo = { workspace = true, optional = true }
+foundationdb = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

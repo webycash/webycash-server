@@ -24,8 +24,8 @@ use nom::IResult;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use webycash_asset_core::{Amount, ContractId, PgpFingerprint};
-use webycash_proto::parsers::{amount_parser, hex64};
+use crate::asset_core::{Amount, ContractId, PgpFingerprint};
+use crate::proto::parsers::{amount_parser, hex64};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RGB20 (splittable, fungible)
@@ -73,7 +73,7 @@ impl SecretFungible {
     /// `e{amount}:secret:{64-hex}:{contract_id}:{issuer_fp}`.
     ///
     /// ```
-    /// use webycash_asset_rgb::SecretFungible;
+    /// use webycash_server::asset_rgb::SecretFungible;
     /// let token = format!(
     ///     "e10.0:secret:{}:rgb20-usdc:{}",
     ///     "a".repeat(64),
@@ -182,7 +182,7 @@ impl SecretCollectible {
     /// amount on the wire.
     ///
     /// ```
-    /// use webycash_asset_rgb::SecretCollectible;
+    /// use webycash_server::asset_rgb::SecretCollectible;
     /// let token = format!(
     ///     "secret:{}:rgb21-art-1:{}",
     ///     "a".repeat(64),

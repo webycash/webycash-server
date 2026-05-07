@@ -13,16 +13,16 @@ use std::str::FromStr;
 
 use anyhow::Context;
 use tracing_subscriber::EnvFilter;
-use webycash_asset_webcash::Webcash;
-use webycash_mining::{MiningConfig, MiningMode};
-use webycash_server_core::{serve, ServeConfig, Server};
-use webycash_storage::dynamodb_backend::DynamoDbStore;
+use webycash_server::asset_webcash::Webcash;
+use webycash_server::mining::{MiningConfig, MiningMode};
+use webycash_server::server_core::{serve, ServeConfig, Server};
+use webycash_server::storage::dynamodb_backend::DynamoDbStore;
 #[cfg(feature = "fdb")]
-use webycash_storage::fdb_backend::FdbStore;
-use webycash_storage::redis_backend::RedisStore;
+use webycash_server::storage::fdb_backend::FdbStore;
+use webycash_server::storage::redis_backend::RedisStore;
 #[cfg(feature = "fdb")]
-use webycash_storage::redis_fdb_backend::RedisFdbStore;
-use webycash_storage::WebcashLegacyKeys;
+use webycash_server::storage::redis_fdb_backend::RedisFdbStore;
+use webycash_server::storage::WebcashLegacyKeys;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

@@ -1,90 +1,22 @@
-//! AluVM execution for the HTLC predicate.
+//! HTLC predicate execution entry point.
 //!
-//! See the parent [`super`] module's docstring for why this is a thin
-//! wrapper over the Rust predicate in v1, and how it's the natural
-//! seam to extend toward bytecode-resident schemas in v2.
-//!
-//! What this module gives the rest of the server:
-//!
-//! - A single function [`execute_predicate`] that takes the parsed
-//!   `(HtlcState, HtlcWitness, current_unix)` triple and returns either
-//!   `Ok(PredicateResult)` or `Err(_)`. Errors carry the user-facing
-//!   diagnostic ready to be rendered into a 422 response.
-//! - The Rust verdict is fed to AluVM via the `CO` (test-result) register,
-//!   then a minimal AluVM program (`chk CO; stop;`) is executed. The
-//!   program's return value (`Status::Ok | Status::Fail`) is what we
-//!   ultimately gate on. This makes the AluVM execution boundary
-//!   load-bearing — even though the actual logic lives in [`super::predicate`]
-//!   today, the server respects the AluVM accept/reject and is wired
-//!   to swap in a bytecode-resident predicate when one ships.
-//! - Complexity limit is bounded — the program has at most a handful
-//!   of instructions; no untrusted code, no unbounded loops.
-
-// `aluasm!` expands to code that references the `alloc` crate; pull it in.
-extern crate alloc;
-
-use aluvm::isa::Instr;
-use aluvm::regs::Status;
-use aluvm::{aluasm, CompiledLib, CoreConfig, LibId, LibSite, Vm};
+//! The server enforces HTLC conditions with pure Rust ([`super::predicate`]).
+//! AluVM contract validation is client-side only (webylib WASM).
 
 use super::predicate::{evaluate, PredicateError, PredicateResult};
 use super::state::{HtlcState, HtlcWitness};
 
-/// Execute the HTLC predicate through the AluVM gate.
+/// Evaluate the HTLC predicate and return the verdict.
 ///
-/// On `Ok(_)`, the contract accepted and the server may proceed with
-/// the `/replace` (subject to the rest of its checks: namespace,
-/// conservation for splittable, ledger consistency).
-///
-/// On `Err(_)`, the server must reject the `/replace` and surface the
-/// error's `Display` as the diagnostic.
+/// AluVM contract validation is client-side only (webylib WASM). The server
+/// enforces HTLC conditions via the pure-Rust predicate in [`super::predicate`];
+/// this function is the stable call site used by `asset_rgb`'s `/replace` handler.
 pub fn execute_predicate(
     state: &HtlcState,
     witness: &HtlcWitness,
     current_unix: u64,
 ) -> Result<PredicateResult, PredicateError> {
-    // Step 1: pure Rust predicate evaluation. Carries the diagnostic.
-    let verdict = evaluate(state, witness, current_unix)?;
-
-    // Step 2: pass the verdict through AluVM as a sanity gate. The
-    // VM's CO register is set to `Ok` when the predicate accepted; the
-    // program then does `chk CO; stop;`. If CO is anything but Ok the
-    // VM ends in `Status::Fail`, which we translate back to a generic
-    // PredicateError. (The original error from `evaluate` is the
-    // user-facing diagnostic; this branch is a defence-in-depth check
-    // that should NEVER fire if the predicate code and the VM gate
-    // agree on what "accept" means — they do.)
-    let program = aluasm! {
-        chk     CO;
-        stop;
-    };
-    let lib = CompiledLib::compile(program, &[])
-        .expect("trivial AluVM program must compile")
-        .into_lib();
-
-    let mut vm = Vm::<Instr<LibId>>::with(
-        CoreConfig {
-            halt: false,
-            // Guard against runaway: this program is 2 instructions, but
-            // bound at a generous limit so a future bytecode-resident
-            // predicate has room without re-plumbing this call site.
-            complexity_lim: Some(10_000),
-        },
-        (),
-    );
-    // The VM's `co` register encodes a boolean test result; we set it
-    // based on the Rust verdict.
-    vm.core.set_co(Status::Ok);
-
-    let resolver = |_: LibId| Some(&lib);
-    match vm.exec(LibSite::new(lib.lib_id(), 0), &(), resolver) {
-        Status::Ok => Ok(verdict),
-        // Defensive: should never hit because we set CO=Ok above when
-        // `evaluate` returned `Ok`. If it does, the AluVM build is
-        // broken — surface as PreimageMismatch (the most generic
-        // reject) so the server's 422 still says something sensible.
-        Status::Fail => Err(PredicateError::PreimageMismatch),
-    }
+    evaluate(state, witness, current_unix)
 }
 
 #[cfg(test)]
@@ -112,13 +44,13 @@ mod tests {
     }
 
     #[test]
-    fn vm_accepts_valid_claim() {
+    fn accepts_valid_claim() {
         let (s, w, t) = fx();
         assert_eq!(execute_predicate(&s, &w, t), Ok(PredicateResult::Claim));
     }
 
     #[test]
-    fn vm_rejects_wrong_preimage_with_diagnostic() {
+    fn rejects_wrong_preimage() {
         let (s, mut w, t) = fx();
         w.provided_x_hex = Some("ff".repeat(32));
         assert_eq!(
@@ -128,7 +60,7 @@ mod tests {
     }
 
     #[test]
-    fn vm_accepts_refund_after_timeout() {
+    fn accepts_refund_after_timeout() {
         let (s, _, _) = fx();
         let refund_secret = "b".repeat(64);
         let w = HtlcWitness {

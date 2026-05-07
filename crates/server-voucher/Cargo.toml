@@ -7,6 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+publish = false
 
 [[bin]]
 name = "webycash-server-voucher"
@@ -14,14 +15,10 @@ path = "src/main.rs"
 
 [features]
 default = []
-fdb = ["webycash-storage/fdb", "webycash-storage/redis-fdb", "dep:foundationdb"]
+fdb = ["webycash-server/fdb", "webycash-server/redis-fdb", "dep:foundationdb"]
 
 [dependencies]
-webycash-server-core = { workspace = true }
-webycash-asset-voucher = { workspace = true }
-webycash-auth = { workspace = true, features = ["openpgp"] }
-webycash-mining = { workspace = true }
-webycash-storage = { workspace = true, features = ["redis", "dynamodb"] }
+webycash-server = { workspace = true, features = ["voucher", "openpgp", "redis", "dynamodb"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

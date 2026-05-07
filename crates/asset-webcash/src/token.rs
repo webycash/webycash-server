@@ -14,8 +14,8 @@ use nom::IResult;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use webycash_asset_core::Amount;
-use webycash_proto::parsers::{amount_parser, hex64};
+use crate::asset_core::Amount;
+use crate::proto::parsers::{amount_parser, hex64};
 
 /// A secret webcash token: `e{amount}:secret:{64-hex-chars}`.
 #[derive(Debug, Clone)]
@@ -52,7 +52,7 @@ impl SecretWebcash {
     /// `e{amount}:secret:{64-hex-chars}`.
     ///
     /// ```
-    /// use webycash_asset_webcash::SecretWebcash;
+    /// use webycash_server::asset_webcash::SecretWebcash;
     /// let s = SecretWebcash::parse(
     ///     "e1.0:secret:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     /// ).unwrap();

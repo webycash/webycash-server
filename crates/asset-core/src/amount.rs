@@ -26,7 +26,7 @@ impl Amount {
     /// Construct from a raw atomic count (1 webcash = 100_000_000 wats).
     ///
     /// ```
-    /// use webycash_asset_core::Amount;
+    /// use webycash_server::asset_core::Amount;
     /// let one = Amount::from_wats(100_000_000);
     /// assert_eq!(one.to_string(), "1.00000000");
     /// ```
@@ -47,7 +47,7 @@ impl Amount {
     /// Overflow-safe addition.
     ///
     /// ```
-    /// use webycash_asset_core::Amount;
+    /// use webycash_server::asset_core::Amount;
     /// let a = Amount::from_wats(i64::MAX);
     /// let one = Amount::from_wats(1);
     /// assert!(a.checked_add(one).is_none());
@@ -59,7 +59,7 @@ impl Amount {
     /// Overflow-safe subtraction.
     ///
     /// ```
-    /// use webycash_asset_core::Amount;
+    /// use webycash_server::asset_core::Amount;
     /// let a = Amount::from_wats(i64::MIN);
     /// let one = Amount::from_wats(1);
     /// assert!(a.checked_sub(one).is_none());

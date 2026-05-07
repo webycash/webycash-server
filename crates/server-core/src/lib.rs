@@ -30,14 +30,14 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
-use webycash_asset_core::{
+use crate::asset_core::{
     Amount, Asset, AssetPublic, CollectibleRecordBuilder, IssuedAsset, MintableAsset,
     RecordBuilder, RecordOrigin, SplittableAsset, TransferableAsset,
 };
-use webycash_asset_core::{ContractId, PgpFingerprint};
-use webycash_auth::{IssuerRegistry, NonceCache};
-use webycash_mining::MiningConfig;
-use webycash_storage::{
+use crate::asset_core::{ContractId, PgpFingerprint};
+use crate::auth::{IssuerRegistry, NonceCache};
+use crate::mining::MiningConfig;
+use crate::storage::{
     BurnRecord, HashRecord, LedgerStore, Namespace, ReplaceOp, ReplaceResult, ReplacementRecord,
 };
 
@@ -60,7 +60,7 @@ impl ServeConfig {
         ServeConfig {
             bind_addr: "0.0.0.0:8080".parse().unwrap(),
             mining: MiningConfig {
-                mode: webycash_mining::MiningMode::webcash_testnet(),
+                mode: crate::mining::MiningMode::webcash_testnet(),
                 ..MiningConfig::default()
             },
         }
@@ -124,7 +124,7 @@ impl<A: Asset, S: LedgerStore<A>> Server<A, S> {
 /// `A: IssuedAsset` (enforced by the `serve_issued` overload).
 pub async fn serve<A, S>(server: Server<A, S>) -> anyhow::Result<()>
 where
-    A: Asset + MintableAsset + SplittableAsset + RecordBuilder + webycash_asset_core::ReplaceHook,
+    A: Asset + MintableAsset + SplittableAsset + RecordBuilder + crate::asset_core::ReplaceHook,
     A::Record: HashRecord,
     S: LedgerStore<A>,
 {
@@ -160,7 +160,7 @@ where
         + SplittableAsset
         + RecordBuilder
         + IssuedAsset
-        + webycash_asset_core::ReplaceHook,
+        + crate::asset_core::ReplaceHook,
     A::Record: HashRecord,
     S: LedgerStore<A>,
 {
@@ -192,7 +192,7 @@ where
         + SplittableAsset
         + RecordBuilder
         + IssuedAsset
-        + webycash_asset_core::ReplaceHook,
+        + crate::asset_core::ReplaceHook,
     A::Record: HashRecord,
     S: LedgerStore<A>,
 {
@@ -223,7 +223,7 @@ where
         + TransferableAsset
         + IssuedAsset
         + CollectibleRecordBuilder
-        + webycash_asset_core::ReplaceHook,
+        + crate::asset_core::ReplaceHook,
     A::Record: HashRecord,
     S: LedgerStore<A>,
 {
@@ -257,7 +257,7 @@ where
         + TransferableAsset
         + IssuedAsset
         + CollectibleRecordBuilder
-        + webycash_asset_core::ReplaceHook,
+        + crate::asset_core::ReplaceHook,
     A::Record: HashRecord,
     S: LedgerStore<A>,
 {
@@ -281,7 +281,7 @@ where
 
 async fn route<A, S>(state: &Server<A, S>, req: Request<Incoming>) -> Response<Full<Bytes>>
 where
-    A: Asset + MintableAsset + SplittableAsset + RecordBuilder + webycash_asset_core::ReplaceHook,
+    A: Asset + MintableAsset + SplittableAsset + RecordBuilder + crate::asset_core::ReplaceHook,
     A::Record: HashRecord,
     S: LedgerStore<A>,
 {
@@ -573,7 +573,7 @@ mod handlers {
         req: Request<Incoming>,
     ) -> Response<Full<Bytes>>
     where
-        A: Asset + SplittableAsset + RecordBuilder + webycash_asset_core::ReplaceHook,
+        A: Asset + SplittableAsset + RecordBuilder + crate::asset_core::ReplaceHook,
         A::Record: HashRecord,
         S: LedgerStore<A>,
     {
@@ -793,7 +793,7 @@ mod handlers {
         };
 
         // PoW check — SHA256 of the submitted preimage bytes (raw JSON or base64).
-        if !webycash_mining::verify_pow(&report.preimage, target_bits) {
+        if !crate::mining::verify_pow(&report.preimage, target_bits) {
             return server_error(&format!("proof-of-work below target ({target_bits} bits)"));
         }
 
@@ -909,7 +909,7 @@ mod handlers {
             return server_error("legalese.terms must be true");
         }
 
-        let issuer = webycash_asset_core::PgpFingerprint(parsed.issuer_fp.to_lowercase());
+        let issuer = crate::asset_core::PgpFingerprint(parsed.issuer_fp.to_lowercase());
         if let Err(e) = registry.verify(&issuer, &body, &sig_bytes) {
             return server_error(&format!("auth: {e}"));
         }
@@ -1064,7 +1064,7 @@ mod handlers {
             + TransferableAsset
             + CollectibleRecordBuilder
             + IssuedAsset
-            + webycash_asset_core::ReplaceHook,
+            + crate::asset_core::ReplaceHook,
         A::Record: HashRecord,
         S: LedgerStore<A>,
     {
@@ -1283,7 +1283,7 @@ mod handlers {
         if !parsed.legalese.as_ref().is_some_and(|l| l.terms) {
             return server_error("legalese.terms must be true");
         }
-        let issuer = webycash_asset_core::PgpFingerprint(parsed.issuer_fp.to_lowercase());
+        let issuer = crate::asset_core::PgpFingerprint(parsed.issuer_fp.to_lowercase());
         if let Err(e) = registry.verify(&issuer, &body, &sig_bytes) {
             return server_error(&format!("auth: {e}"));
         }

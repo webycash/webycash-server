@@ -29,7 +29,7 @@ pub use token::{PublicCollectible, PublicFungible, SecretCollectible, SecretFung
 
 use std::collections::HashMap;
 
-use webycash_asset_core::{
+use crate::asset_core::{
     Amount, Asset, AssetError, AssetPublic, AssetRecord, AssetSecret, CollectibleRecordBuilder,
     ContractId, IssuedAsset, MintableAsset, PgpFingerprint, RecordBuilder, RecordOrigin,
     ReplaceHook, Result as AssetResult, SplittableAsset, TransferableAsset,
@@ -93,15 +93,15 @@ pub struct RgbFungibleRecord {
 
 impl AssetRecord for RgbFungibleRecord {}
 
-impl webycash_storage::HashRecord for RgbFungibleRecord {
+impl crate::storage::HashRecord for RgbFungibleRecord {
     fn public_hash(&self) -> &str {
         &self.public_hash
     }
     fn amount_wats(&self) -> i64 {
         self.amount_wats
     }
-    fn namespace(&self) -> webycash_storage::Namespace {
-        webycash_storage::Namespace::scoped(self.contract_id.clone(), self.issuer_fp.clone())
+    fn namespace(&self) -> crate::storage::Namespace {
+        crate::storage::Namespace::scoped(self.contract_id.clone(), self.issuer_fp.clone())
     }
     fn to_fields(&self, fields: &mut HashMap<String, String>) {
         fields.insert("amount_wats".into(), self.amount_wats.to_string());
@@ -201,7 +201,7 @@ pub struct RgbCollectibleRecord {
 
 impl AssetRecord for RgbCollectibleRecord {}
 
-impl webycash_storage::HashRecord for RgbCollectibleRecord {
+impl crate::storage::HashRecord for RgbCollectibleRecord {
     fn public_hash(&self) -> &str {
         &self.public_hash
     }
@@ -209,8 +209,8 @@ impl webycash_storage::HashRecord for RgbCollectibleRecord {
         // RGB21 records carry no fungible amount; report 0.
         0
     }
-    fn namespace(&self) -> webycash_storage::Namespace {
-        webycash_storage::Namespace::scoped(self.contract_id.clone(), self.issuer_fp.clone())
+    fn namespace(&self) -> crate::storage::Namespace {
+        crate::storage::Namespace::scoped(self.contract_id.clone(), self.issuer_fp.clone())
     }
     fn to_fields(&self, fields: &mut HashMap<String, String>) {
         // amount_wats=0 marks the record as collectible (no amount slot in
@@ -315,11 +315,11 @@ impl Asset for RgbFungible {
 
     fn parse_secret(s: &str) -> AssetResult<Self::Secret> {
         SecretFungible::parse(s)
-            .map_err(|e| webycash_asset_core::AssetError::Parse(format!("rgb20 secret: {e}")))
+            .map_err(|e| crate::asset_core::AssetError::Parse(format!("rgb20 secret: {e}")))
     }
     fn parse_public(s: &str) -> AssetResult<Self::Public> {
         PublicFungible::parse(s)
-            .map_err(|e| webycash_asset_core::AssetError::Parse(format!("rgb20 public: {e}")))
+            .map_err(|e| crate::asset_core::AssetError::Parse(format!("rgb20 public: {e}")))
     }
     fn to_public(secret: &Self::Secret) -> Self::Public {
         secret.to_public()
@@ -366,13 +366,13 @@ impl MintableAsset for RgbFungible {
         };
         for r in iter {
             if r.contract_id != first.contract_id {
-                return Err(webycash_asset_core::AssetError::Invariant(format!(
+                return Err(crate::asset_core::AssetError::Invariant(format!(
                     "issuance batch crosses contract_id: {} vs {}",
                     first.contract_id, r.contract_id,
                 )));
             }
             if r.issuer_fp != first.issuer_fp {
-                return Err(webycash_asset_core::AssetError::Invariant(format!(
+                return Err(crate::asset_core::AssetError::Invariant(format!(
                     "issuance batch crosses issuer_fp: {} vs {}",
                     first.issuer_fp, r.issuer_fp,
                 )));
@@ -559,11 +559,11 @@ impl Asset for RgbCollectible {
 
     fn parse_secret(s: &str) -> AssetResult<Self::Secret> {
         SecretCollectible::parse(s)
-            .map_err(|e| webycash_asset_core::AssetError::Parse(format!("rgb21 secret: {e}")))
+            .map_err(|e| crate::asset_core::AssetError::Parse(format!("rgb21 secret: {e}")))
     }
     fn parse_public(s: &str) -> AssetResult<Self::Public> {
         PublicCollectible::parse(s)
-            .map_err(|e| webycash_asset_core::AssetError::Parse(format!("rgb21 public: {e}")))
+            .map_err(|e| crate::asset_core::AssetError::Parse(format!("rgb21 public: {e}")))
     }
     fn to_public(secret: &Self::Secret) -> Self::Public {
         secret.to_public()
@@ -633,15 +633,15 @@ impl TransferableAsset for RgbCollectible {
     fn validate_transfer(
         input: &Self::Secret,
         output: &Self::Secret,
-    ) -> webycash_asset_core::Result<()> {
+    ) -> crate::asset_core::Result<()> {
         if input.contract_id != output.contract_id {
-            return Err(webycash_asset_core::AssetError::Invariant(format!(
+            return Err(crate::asset_core::AssetError::Invariant(format!(
                 "contract_id mismatch: {} vs {}",
                 input.contract_id, output.contract_id,
             )));
         }
         if input.issuer_fp != output.issuer_fp {
-            return Err(webycash_asset_core::AssetError::Invariant(format!(
+            return Err(crate::asset_core::AssetError::Invariant(format!(
                 "issuer_fp mismatch: {} vs {}",
                 input.issuer_fp, output.issuer_fp,
             )));
@@ -749,7 +749,7 @@ mod tests {
         let a = collectible(&"a".repeat(64), "rgb21-art", issuer.clone());
         let b = collectible(&"b".repeat(64), "rgb21-other", issuer);
         let err = RgbCollectible::validate_transfer(&a, &b).unwrap_err();
-        assert!(matches!(err, webycash_asset_core::AssetError::Invariant(_)));
+        assert!(matches!(err, crate::asset_core::AssetError::Invariant(_)));
     }
 
     #[test]
@@ -757,7 +757,7 @@ mod tests {
         let a = collectible(&"a".repeat(64), "rgb21-art", fp(0xaa));
         let b = collectible(&"b".repeat(64), "rgb21-art", fp(0xbb));
         let err = RgbCollectible::validate_transfer(&a, &b).unwrap_err();
-        assert!(matches!(err, webycash_asset_core::AssetError::Invariant(_)));
+        assert!(matches!(err, crate::asset_core::AssetError::Invariant(_)));
     }
 
     #[test]
@@ -767,7 +767,7 @@ mod tests {
         let err = RgbCollectible::validate_transfer(&a, &b).unwrap_err();
         // Reports the first mismatch encountered (contract_id).
         assert!(
-            matches!(err, webycash_asset_core::AssetError::Invariant(msg) if msg.contains("contract_id"))
+            matches!(err, crate::asset_core::AssetError::Invariant(msg) if msg.contains("contract_id"))
         );
     }
 
@@ -815,7 +815,7 @@ mod tests {
         };
         let err = RgbFungible::verify_issuance(&ctx).unwrap_err();
         assert!(
-            matches!(&err, webycash_asset_core::AssetError::Invariant(msg) if msg.contains("contract_id")),
+            matches!(&err, crate::asset_core::AssetError::Invariant(msg) if msg.contains("contract_id")),
             "got {err:?}",
         );
     }
@@ -830,7 +830,7 @@ mod tests {
         };
         let err = RgbFungible::verify_issuance(&ctx).unwrap_err();
         assert!(
-            matches!(&err, webycash_asset_core::AssetError::Invariant(msg) if msg.contains("issuer_fp")),
+            matches!(&err, crate::asset_core::AssetError::Invariant(msg) if msg.contains("issuer_fp")),
             "got {err:?}",
         );
     }
@@ -855,7 +855,7 @@ mod tests {
             "issuer_fp".into(),
             "aabbccddeeff00112233445566778899aabbccdd".into(),
         );
-        let r = <RgbFungibleRecord as webycash_storage::HashRecord>::from_fields("h", &fields)
+        let r = <RgbFungibleRecord as crate::storage::HashRecord>::from_fields("h", &fields)
             .expect("legacy row must load");
         assert_eq!(r.origin, RgbOrigin::Replaced);
     }
