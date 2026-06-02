@@ -1,5 +1,19 @@
 # Referee design docs
 
+> **STATUS: REFERENCE / TEST-ORACLE ONLY — not the production backend.**
+> This `referee/` crate and the docs in this folder are the protocol
+> **reference implementation and behavioral test oracle**. The **production**
+> referee for **Webcash/Voucher ↔ Bitcoin ARK** swaps lives in the separate
+> **`webycash/webycash-referee`** repository, built as a **native Rust
+> `hyper` + REST serverless function** with a transactional / conditional-write
+> store (DynamoDB `ConditionExpression` / FoundationDB) for settle-XOR-refund —
+> **not** a Cloudflare Worker and **not** Cloudflare Durable Objects. See
+> [`webycash-server/docs/referee-production-coordination.md`](../../docs/referee-production-coordination.md)
+> for the authoritative runtime + storage description, the reuse/replace
+> boundary, and the conflict log. The runtime/storage prose in
+> `architecture.md`, `deployment.md`, and `trust-model.md` below predates that
+> coordination doc and is reference-only.
+
 The `referee` binary mediates **Webcash ↔ Bitcoin ARK** swaps using a
 non-custodial protocol: both parties' encrypted payloads are verified
 via Groth16 ZKPs against the public hashes the audit chain commits to,
