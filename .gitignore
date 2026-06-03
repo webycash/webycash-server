@@ -7,3 +7,9 @@ Cargo.lock
 .env
 .env.*
 !.env.example
+
+# Cloudflare deploy: local miniflare state + TS Worker artifacts
+.wrangler/
+deploy/cloudflare-container/workers/*/node_modules/
+deploy/cloudflare-container/workers/*/worker-configuration.d.ts
+deploy/cloudflare-container/workers/*/package-lock.json

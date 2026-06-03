@@ -18,7 +18,7 @@ default = []
 fdb = ["webycash-server/fdb", "webycash-server/redis-fdb", "dep:foundationdb"]
 
 [dependencies]
-webycash-server = { workspace = true, features = ["rgb", "openpgp", "redis", "dynamodb"] }
+webycash-server = { workspace = true, features = ["rgb", "openpgp", "redis", "dynamodb", "worker-proxy"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

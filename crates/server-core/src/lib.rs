@@ -18,7 +18,6 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-use std::convert::Infallible;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -34,14 +33,87 @@ use crate::storage::{
     BurnRecord, HashRecord, LedgerStore, Namespace, ReplaceOp, ReplaceResult, ReplacementRecord,
 };
 use bytes::Bytes;
+use http::StatusCode;
+
+use std::convert::Infallible;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::service::service_fn;
-use hyper::{Method, Request, Response, StatusCode};
+use hyper::{Request, Response};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
 
 const MAX_BODY_BYTES: usize = 1024 * 1024; // 1 MB — matches legacy server
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `ProtoRequest` / `ProtoResponse` decouple the handler bodies from the
+// `hyper::Request<Incoming>` / `hyper::Response<Full<Bytes>>` types so
+// each handler is a plain `(state, &ProtoRequest) -> ProtoResponse`
+// function. The hyper boundary (`from_hyper` + `proto_to_hyper`) is the
+// only place the wire types are touched.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Runtime-neutral HTTP request envelope. Carries everything every handler
+/// in `server-core` reads: method, path, lowercased headers, and the
+/// already-collected body bytes. The hyper boundary (`from_hyper`) and the
+/// worker boundary (in each Cloudflare worker binary) build one of these per
+/// request.
+#[derive(Debug)]
+pub struct ProtoRequest {
+    /// HTTP method as a borrowed-friendly string ("GET", "POST", ...).
+    pub method: String,
+    /// Request path (`uri.path()` on hyper, `url.path()` in worker).
+    pub path: String,
+    /// Header map with **lowercased** keys. Handlers that need a header
+    /// look it up via `req.headers.get("x-issuer-signature")`, etc.
+    pub headers: std::collections::HashMap<String, String>,
+    /// Body bytes, already drained from the underlying transport.
+    pub body: Bytes,
+}
+
+/// Runtime-neutral HTTP response envelope. The hyper boundary converts via
+/// [`proto_to_hyper`]; the worker boundary iterates `headers` onto
+/// `worker::Response`.
+#[derive(Debug, Clone)]
+pub struct ProtoResponse {
+    /// HTTP status code (200, 404, 500, ...).
+    pub status: u16,
+    /// Response headers (case-insensitive on the wire; emit lowercased).
+    pub headers: Vec<(&'static str, &'static str)>,
+    /// Response body.
+    pub body: Bytes,
+}
+
+/// Collect a `hyper::Request<Incoming>` into a [`ProtoRequest`]. Drains
+/// the body upfront so the inner handler is purely synchronous-from-bytes.
+async fn from_hyper(req: Request<Incoming>) -> Result<ProtoRequest, hyper::Error> {
+    let (parts, body_inc) = req.into_parts();
+    let body = body_inc.collect().await?.to_bytes();
+    let _ = MAX_BODY_BYTES;
+    let method = parts.method.as_str().to_string();
+    let path = parts.uri.path().to_string();
+    let mut headers = std::collections::HashMap::with_capacity(parts.headers.len());
+    for (k, v) in parts.headers.iter() {
+        if let Ok(s) = v.to_str() {
+            headers.insert(k.as_str().to_lowercase(), s.to_string());
+        }
+    }
+    Ok(ProtoRequest {
+        method,
+        path,
+        headers,
+        body,
+    })
+}
+
+/// Convert a [`ProtoResponse`] into a hyper response.
+pub fn proto_to_hyper(resp: ProtoResponse) -> Response<Full<Bytes>> {
+    let mut builder = Response::builder().status(resp.status);
+    for (k, v) in &resp.headers {
+        builder = builder.header(*k, *v);
+    }
+    builder.body(Full::new(resp.body)).unwrap()
+}
 
 /// Global server configuration: bind address, asset-agnostic settings.
 #[derive(Debug, Clone)]
@@ -122,6 +194,9 @@ impl<A: Asset, S: LedgerStore<A>> Server<A, S> {
 /// are supported on the same port. Handles every Webcash-style endpoint;
 /// `/api/v1/issue` is gated by `Server::issuers.is_some()` and
 /// `A: IssuedAsset` (enforced by the `serve_issued` overload).
+///
+/// Native-only — the Cloudflare Workers binaries call [`route_proto`]
+/// directly from a `#[event(fetch)]` entry point.
 pub async fn serve<A, S>(server: Server<A, S>) -> anyhow::Result<()>
 where
     A: Asset + MintableAsset + SplittableAsset + RecordBuilder + crate::asset_core::ReplaceHook,
@@ -153,6 +228,8 @@ where
 /// routing plus `POST /api/v1/issue` (Ed25519-signed operator mint).
 /// `Server::issuers` must be populated for `/issue` to accept anything;
 /// otherwise the handler returns 503.
+///
+/// Native-only — see [`route_proto_issued`] for the runtime-neutral entry.
 pub async fn serve_issued<A, S>(server: Server<A, S>) -> anyhow::Result<()>
 where
     A: Asset
@@ -196,10 +273,33 @@ where
     A::Record: HashRecord,
     S: LedgerStore<A>,
 {
-    match (req.method(), req.uri().path()) {
-        (&Method::POST, "/api/v1/issue") => handlers::issue::<A, S>(state, req).await,
-        _ => route::<A, S>(state, req).await,
+    let proto = match from_hyper(req).await {
+        Ok(r) => r,
+        Err(e) => return proto_to_hyper(server_error(&format!("body: {e}"))),
+    };
+    proto_to_hyper(route_proto_issued::<A, S>(state, &proto).await)
+}
+
+/// Runtime-neutral dispatch for issued asset flavors. The hyper boundary
+/// is `route_issued`; the Cloudflare Worker boundary calls this directly.
+pub async fn route_proto_issued<A, S>(
+    state: &Server<A, S>,
+    req: &ProtoRequest,
+) -> ProtoResponse
+where
+    A: Asset
+        + MintableAsset
+        + SplittableAsset
+        + RecordBuilder
+        + IssuedAsset
+        + crate::asset_core::ReplaceHook,
+    A::Record: HashRecord,
+    S: LedgerStore<A>,
+{
+    if req.method == "POST" && req.path == "/api/v1/issue" {
+        return handlers::issue::<A, S>(state, req).await;
     }
+    route_proto::<A, S>(state, req).await
 }
 
 /// Variant for non-splittable / collectible asset flavors (RGB21).
@@ -216,6 +316,9 @@ where
 ///
 /// `/api/v1/mining_report` is statically absent because RGB21 can't
 /// be PoW-mined; issuance is operator-signed only.
+///
+/// Native-only — see [`route_proto_collectible`] for the runtime-neutral
+/// entry.
 pub async fn serve_collectible<A, S>(server: Server<A, S>) -> anyhow::Result<()>
 where
     A: Asset
@@ -261,20 +364,42 @@ where
     A::Record: HashRecord,
     S: LedgerStore<A>,
 {
+    let proto = match from_hyper(req).await {
+        Ok(r) => r,
+        Err(e) => return proto_to_hyper(server_error(&format!("body: {e}"))),
+    };
+    proto_to_hyper(route_proto_collectible::<A, S>(state, &proto).await)
+}
+
+/// Runtime-neutral dispatch for non-splittable / collectible asset flavors
+/// (RGB21). The hyper boundary is `route_collectible`; the Cloudflare
+/// Worker boundary calls this directly.
+pub async fn route_proto_collectible<A, S>(
+    state: &Server<A, S>,
+    req: &ProtoRequest,
+) -> ProtoResponse
+where
+    A: Asset
+        + MintableAsset
+        + TransferableAsset
+        + IssuedAsset
+        + CollectibleRecordBuilder
+        + crate::asset_core::ReplaceHook,
+    A::Record: HashRecord,
+    S: LedgerStore<A>,
+{
     // Non-splittable flavors expose the SAME endpoint names as splittable
     // ones. Servers always replace secrets; the difference is the
     // arity constraint (1:1 here, N:M for splittable).
-    match (req.method(), req.uri().path()) {
-        (&Method::GET, "/api/v1/target") => handlers::target::<A, S>(state).await,
-        (&Method::GET, "/terms") | (&Method::GET, "/terms/text") => handlers::terms().await,
-        (&Method::POST, "/api/v1/health_check") => {
+    match (req.method.as_str(), req.path.as_str()) {
+        ("GET", "/api/v1/target") => handlers::target::<A, S>(state).await,
+        ("GET", "/terms") | ("GET", "/terms/text") => handlers::terms().await,
+        ("POST", "/api/v1/health_check") => {
             handlers::health_check_collectible::<A, S>(state, req).await
         }
-        (&Method::POST, "/api/v1/replace") => {
-            handlers::replace_collectible::<A, S>(state, req).await
-        }
-        (&Method::POST, "/api/v1/burn") => handlers::burn_collectible::<A, S>(state, req).await,
-        (&Method::POST, "/api/v1/issue") => handlers::issue_collectible::<A, S>(state, req).await,
+        ("POST", "/api/v1/replace") => handlers::replace_collectible::<A, S>(state, req).await,
+        ("POST", "/api/v1/burn") => handlers::burn_collectible::<A, S>(state, req).await,
+        ("POST", "/api/v1/issue") => handlers::issue_collectible::<A, S>(state, req).await,
         _ => not_found(),
     }
 }
@@ -285,58 +410,72 @@ where
     A::Record: HashRecord,
     S: LedgerStore<A>,
 {
-    match (req.method(), req.uri().path()) {
-        (&Method::GET, "/api/v1/target") => handlers::target::<A, S>(state).await,
-        (&Method::GET, "/terms") | (&Method::GET, "/terms/text") => handlers::terms().await,
-        (&Method::POST, "/api/v1/health_check") => handlers::health_check::<A, S>(state, req).await,
-        (&Method::POST, "/api/v1/replace") => handlers::replace::<A, S>(state, req).await,
-        (&Method::POST, "/api/v1/mining_report") => {
-            handlers::mining_report::<A, S>(state, req).await
-        }
-        (&Method::POST, "/api/v1/burn") => handlers::burn::<A, S>(state, req).await,
-        (&Method::GET, "/api/v1/stats") => handlers::stats::<A, S>(state).await,
+    let proto = match from_hyper(req).await {
+        Ok(r) => r,
+        Err(e) => return proto_to_hyper(server_error(&format!("body: {e}"))),
+    };
+    proto_to_hyper(route_proto::<A, S>(state, &proto).await)
+}
+
+/// Runtime-neutral dispatch for splittable asset flavors (Webcash, RGB20,
+/// Voucher). The hyper boundary is `route`; the Cloudflare Worker boundary
+/// calls this directly.
+pub async fn route_proto<A, S>(state: &Server<A, S>, req: &ProtoRequest) -> ProtoResponse
+where
+    A: Asset + MintableAsset + SplittableAsset + RecordBuilder + crate::asset_core::ReplaceHook,
+    A::Record: HashRecord,
+    S: LedgerStore<A>,
+{
+    match (req.method.as_str(), req.path.as_str()) {
+        ("GET", "/api/v1/target") => handlers::target::<A, S>(state).await,
+        ("GET", "/terms") | ("GET", "/terms/text") => handlers::terms().await,
+        ("POST", "/api/v1/health_check") => handlers::health_check::<A, S>(state, req).await,
+        ("POST", "/api/v1/replace") => handlers::replace::<A, S>(state, req).await,
+        ("POST", "/api/v1/mining_report") => handlers::mining_report::<A, S>(state, req).await,
+        ("POST", "/api/v1/burn") => handlers::burn::<A, S>(state, req).await,
+        ("GET", "/api/v1/stats") => handlers::stats::<A, S>(state).await,
         _ => not_found(),
     }
 }
 
-fn not_found() -> Response<Full<Bytes>> {
-    let body = "<html><title>404: Not Found</title><body>404: Not Found</body></html>";
-    Response::builder()
-        .status(StatusCode::NOT_FOUND)
-        .header("content-type", "text/html; charset=UTF-8")
-        .body(Full::new(Bytes::from(body)))
-        .unwrap()
+fn not_found() -> ProtoResponse {
+    ProtoResponse {
+        status: StatusCode::NOT_FOUND.as_u16(),
+        headers: vec![("content-type", "text/html; charset=UTF-8")],
+        body: Bytes::from_static(
+            b"<html><title>404: Not Found</title><body>404: Not Found</body></html>",
+        ),
+    }
 }
 
-fn ok_text_html_json(body: String) -> Response<Full<Bytes>> {
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("content-type", "text/html; charset=UTF-8")
-        .header("access-control-allow-origin", "*")
-        .header("access-control-allow-headers", "x-requested-with")
-        .header("access-control-allow-methods", "POST, GET, OPTIONS")
-        .header("strict-transport-security", "max-age=15768000")
-        .body(Full::new(Bytes::from(body)))
-        .unwrap()
+fn ok_text_html_json(body: String) -> ProtoResponse {
+    ProtoResponse {
+        status: StatusCode::OK.as_u16(),
+        headers: vec![
+            ("content-type", "text/html; charset=UTF-8"),
+            ("access-control-allow-origin", "*"),
+            ("access-control-allow-headers", "x-requested-with"),
+            ("access-control-allow-methods", "POST, GET, OPTIONS"),
+            ("strict-transport-security", "max-age=15768000"),
+        ],
+        body: Bytes::from(body),
+    }
 }
 
-fn server_error(msg: &str) -> Response<Full<Bytes>> {
-    let body = "<html><title>500: Internal Server Error</title><body>500: Internal Server Error</body></html>";
+fn server_error(msg: &str) -> ProtoResponse {
     tracing::warn!(error = msg, "500");
-    Response::builder()
-        .status(StatusCode::INTERNAL_SERVER_ERROR)
-        .header("content-type", "text/html; charset=UTF-8")
-        .header("access-control-allow-origin", "*")
-        .header("access-control-allow-headers", "x-requested-with")
-        .header("access-control-allow-methods", "POST, GET, OPTIONS")
-        .body(Full::new(Bytes::from(body)))
-        .unwrap()
-}
-
-async fn collect_body(req: Request<Incoming>) -> Result<Bytes, hyper::Error> {
-    let body = req.into_body().collect().await?.to_bytes();
-    let _ = MAX_BODY_BYTES;
-    Ok(body)
+    ProtoResponse {
+        status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+        headers: vec![
+            ("content-type", "text/html; charset=UTF-8"),
+            ("access-control-allow-origin", "*"),
+            ("access-control-allow-headers", "x-requested-with"),
+            ("access-control-allow-methods", "POST, GET, OPTIONS"),
+        ],
+        body: Bytes::from_static(
+            b"<html><title>500: Internal Server Error</title><body>500: Internal Server Error</body></html>",
+        ),
+    }
 }
 
 /// Body envelope shared by replace + burn + mining_report.
@@ -353,7 +492,7 @@ mod handlers {
     /// `GET /api/v1/target`
     pub async fn target<A: Asset + MintableAsset, S: LedgerStore<A>>(
         state: &Server<A, S>,
-    ) -> Response<Full<Bytes>> {
+    ) -> ProtoResponse {
         let cfg = &state.config.mining;
         let difficulty = cfg.current_difficulty().unwrap_or(1);
         let mining = wats_to_string(cfg.mining_amount_wats);
@@ -372,7 +511,7 @@ mod handlers {
     ///
     /// Webycash extension (production webcash.org returns 404). Reports
     /// EconomyStats derived from MiningState.
-    pub async fn stats<A, S>(state: &Server<A, S>) -> Response<Full<Bytes>>
+    pub async fn stats<A, S>(state: &Server<A, S>) -> ProtoResponse
     where
         A: Asset + MintableAsset + SplittableAsset + RecordBuilder,
         A::Record: HashRecord,
@@ -394,16 +533,18 @@ mod handlers {
     }
 
     /// `GET /terms` / `GET /terms/text`
-    pub async fn terms() -> Response<Full<Bytes>> {
-        Response::builder()
-            .status(StatusCode::OK)
-            .header("content-type", "text/html; charset=UTF-8")
-            .header("access-control-allow-origin", "*")
-            .header("access-control-allow-methods", "GET, OPTIONS")
-            .body(Full::new(Bytes::from(
-                "Webycash Terms of Service\n\nPlaceholder; full text wired in M1 follow-up.\n",
-            )))
-            .unwrap()
+    pub async fn terms() -> ProtoResponse {
+        ProtoResponse {
+            status: StatusCode::OK.as_u16(),
+            headers: vec![
+                ("content-type", "text/html; charset=UTF-8"),
+                ("access-control-allow-origin", "*"),
+                ("access-control-allow-methods", "GET, OPTIONS"),
+            ],
+            body: Bytes::from_static(
+                b"Webycash Terms of Service\n\nPlaceholder; full text wired in M1 follow-up.\n",
+            ),
+        }
     }
 
     /// `POST /api/v1/health_check`
@@ -420,18 +561,14 @@ mod handlers {
     /// ```
     pub async fn health_check<A, S>(
         state: &Server<A, S>,
-        req: Request<Incoming>,
-    ) -> Response<Full<Bytes>>
+        req: &ProtoRequest,
+    ) -> ProtoResponse
     where
         A: Asset + SplittableAsset + RecordBuilder,
         A::Record: HashRecord,
         S: LedgerStore<A>,
     {
-        let body = match collect_body(req).await {
-            Ok(b) => b,
-            Err(e) => return server_error(&format!("body: {e}")),
-        };
-        let tokens: Vec<String> = match serde_json::from_slice(&body) {
+        let tokens: Vec<String> = match serde_json::from_slice(&req.body) {
             Ok(v) => v,
             Err(e) => return server_error(&format!("parse: {e}")),
         };
@@ -570,8 +707,8 @@ mod handlers {
     /// Conservation law enforced: sum of input amounts == sum of output amounts.
     pub async fn replace<A, S>(
         state: &Server<A, S>,
-        req: Request<Incoming>,
-    ) -> Response<Full<Bytes>>
+        req: &ProtoRequest,
+    ) -> ProtoResponse
     where
         A: Asset + SplittableAsset + RecordBuilder + crate::asset_core::ReplaceHook,
         A::Record: HashRecord,
@@ -587,10 +724,7 @@ mod handlers {
             legalese: Option<Legalese>,
         }
 
-        let body = match collect_body(req).await {
-            Ok(b) => b,
-            Err(e) => return server_error(&format!("body: {e}")),
-        };
+        let body = req.body.clone();
         let parsed: ReplaceBody = match serde_json::from_slice(&body) {
             Ok(v) => v,
             Err(e) => return server_error(&format!("parse: {e}")),
@@ -750,8 +884,8 @@ mod handlers {
     /// inserts the webcash + subsidy outputs as Mined records.
     pub async fn mining_report<A, S>(
         state: &Server<A, S>,
-        req: Request<Incoming>,
-    ) -> Response<Full<Bytes>>
+        req: &ProtoRequest,
+    ) -> ProtoResponse
     where
         A: Asset + MintableAsset + SplittableAsset + RecordBuilder,
         A::Record: HashRecord,
@@ -774,11 +908,7 @@ mod handlers {
             timestamp: u64,
         }
 
-        let body = match collect_body(req).await {
-            Ok(b) => b,
-            Err(e) => return server_error(&format!("body: {e}")),
-        };
-        let report: MiningReportBody = match serde_json::from_slice(&body) {
+        let report: MiningReportBody = match serde_json::from_slice(&req.body) {
             Ok(v) => v,
             Err(e) => return server_error(&format!("parse: {e}")),
         };
@@ -860,7 +990,7 @@ mod handlers {
     /// bytes as received). Server validates against the registered issuer
     /// pubkey, checks nonce isn't replayed, parses outputs, and inserts
     /// them as Issued records.
-    pub async fn issue<A, S>(state: &Server<A, S>, req: Request<Incoming>) -> Response<Full<Bytes>>
+    pub async fn issue<A, S>(state: &Server<A, S>, req: &ProtoRequest) -> ProtoResponse
     where
         A: Asset + SplittableAsset + RecordBuilder + IssuedAsset,
         A::Record: HashRecord,
@@ -870,14 +1000,8 @@ mod handlers {
             return server_error("issuer registry not configured");
         };
 
-        // Pull the signature header BEFORE consuming the body.
-        let sig_hex = match req
-            .headers()
-            .get("x-issuer-signature")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string())
-        {
-            Some(s) => s,
+        let sig_hex = match req.headers.get("x-issuer-signature") {
+            Some(s) => s.clone(),
             None => return server_error("missing X-Issuer-Signature header"),
         };
         let sig_bytes = match hex::decode(&sig_hex) {
@@ -885,10 +1009,7 @@ mod handlers {
             Err(e) => return server_error(&format!("signature hex: {e}")),
         };
 
-        let body = match collect_body(req).await {
-            Ok(b) => b,
-            Err(e) => return server_error(&format!("body: {e}")),
-        };
+        let body = req.body.clone();
 
         #[derive(serde::Deserialize)]
         struct IssueBody {
@@ -963,18 +1084,14 @@ mod handlers {
     /// namespace lookup.
     pub async fn health_check_collectible<A, S>(
         state: &Server<A, S>,
-        req: Request<Incoming>,
-    ) -> Response<Full<Bytes>>
+        req: &ProtoRequest,
+    ) -> ProtoResponse
     where
         A: Asset + TransferableAsset + CollectibleRecordBuilder,
         A::Record: HashRecord,
         S: LedgerStore<A>,
     {
-        let body = match collect_body(req).await {
-            Ok(b) => b,
-            Err(e) => return server_error(&format!("body: {e}")),
-        };
-        let tokens: Vec<String> = match serde_json::from_slice(&body) {
+        let tokens: Vec<String> = match serde_json::from_slice(&req.body) {
             Ok(v) => v,
             Err(e) => return server_error(&format!("parse: {e}")),
         };
@@ -1057,8 +1174,8 @@ mod handlers {
     /// happens client-side, before the wallet submits this request.)
     pub async fn replace_collectible<A, S>(
         state: &Server<A, S>,
-        req: Request<Incoming>,
-    ) -> Response<Full<Bytes>>
+        req: &ProtoRequest,
+    ) -> ProtoResponse
     where
         A: Asset
             + TransferableAsset
@@ -1080,10 +1197,7 @@ mod handlers {
             #[serde(default)]
             legalese: Option<Legalese>,
         }
-        let body = match collect_body(req).await {
-            Ok(b) => b,
-            Err(e) => return server_error(&format!("body: {e}")),
-        };
+        let body = req.body.clone();
         let parsed: ReplaceBody = match serde_json::from_slice(&body) {
             Ok(v) => v,
             Err(e) => return server_error(&format!("parse: {e}")),
@@ -1164,7 +1278,7 @@ mod handlers {
             <A as CollectibleRecordBuilder>::record_from_secret(&output, RecordOrigin::Replaced);
         // Stamp HTLC lock state onto the output if `htlc_locks` is present
         // — same shape as the fungible flow.
-        let mut outputs_slice = std::slice::from_mut(&mut output_record);
+        let outputs_slice = std::slice::from_mut(&mut output_record);
         if let Err(e) = A::augment_output_records(&body, outputs_slice, server_now_unix) {
             return server_error(&format!("{e}"));
         }
@@ -1192,8 +1306,8 @@ mod handlers {
     /// `POST /api/v1/burn` — non-splittable variant.
     pub async fn burn_collectible<A, S>(
         state: &Server<A, S>,
-        req: Request<Incoming>,
-    ) -> Response<Full<Bytes>>
+        req: &ProtoRequest,
+    ) -> ProtoResponse
     where
         A: Asset + TransferableAsset + CollectibleRecordBuilder,
         S: LedgerStore<A>,
@@ -1204,11 +1318,7 @@ mod handlers {
             #[serde(default)]
             legalese: Option<Legalese>,
         }
-        let body = match collect_body(req).await {
-            Ok(b) => b,
-            Err(e) => return server_error(&format!("body: {e}")),
-        };
-        let parsed: BurnBody = match serde_json::from_slice(&body) {
+        let parsed: BurnBody = match serde_json::from_slice(&req.body) {
             Ok(v) => v,
             Err(e) => return server_error(&format!("parse: {e}")),
         };
@@ -1242,8 +1352,8 @@ mod handlers {
     /// `CollectibleRecordBuilder` to build records.
     pub async fn issue_collectible<A, S>(
         state: &Server<A, S>,
-        req: Request<Incoming>,
-    ) -> Response<Full<Bytes>>
+        req: &ProtoRequest,
+    ) -> ProtoResponse
     where
         A: Asset + TransferableAsset + CollectibleRecordBuilder + IssuedAsset,
         A::Record: HashRecord,
@@ -1252,23 +1362,15 @@ mod handlers {
         let Some(registry) = state.issuers.clone() else {
             return server_error("issuer registry not configured");
         };
-        let sig_hex = match req
-            .headers()
-            .get("x-issuer-signature")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string())
-        {
-            Some(s) => s,
+        let sig_hex = match req.headers.get("x-issuer-signature") {
+            Some(s) => s.clone(),
             None => return server_error("missing X-Issuer-Signature header"),
         };
         let sig_bytes = match hex::decode(&sig_hex) {
             Ok(b) => b,
             Err(e) => return server_error(&format!("signature hex: {e}")),
         };
-        let body = match collect_body(req).await {
-            Ok(b) => b,
-            Err(e) => return server_error(&format!("body: {e}")),
-        };
+        let body = req.body.clone();
         #[derive(serde::Deserialize)]
         struct IssueBody {
             issuer_fp: String,
@@ -1322,7 +1424,7 @@ mod handlers {
     ///
     /// Body shape: `{"webcash": "e{amt}:secret:{hex}", "legalese": {"terms": true}}`.
     /// Marks the token as spent, records an audit entry.
-    pub async fn burn<A, S>(state: &Server<A, S>, req: Request<Incoming>) -> Response<Full<Bytes>>
+    pub async fn burn<A, S>(state: &Server<A, S>, req: &ProtoRequest) -> ProtoResponse
     where
         A: Asset + SplittableAsset + RecordBuilder,
         S: LedgerStore<A>,
@@ -1333,11 +1435,7 @@ mod handlers {
             #[serde(default)]
             legalese: Option<Legalese>,
         }
-        let body = match collect_body(req).await {
-            Ok(b) => b,
-            Err(e) => return server_error(&format!("body: {e}")),
-        };
-        let parsed: BurnBody = match serde_json::from_slice(&body) {
+        let parsed: BurnBody = match serde_json::from_slice(&req.body) {
             Ok(v) => v,
             Err(e) => return server_error(&format!("parse: {e}")),
         };

@@ -14,7 +14,12 @@ Open-source webcash protocol server implementation in Rust.
 
 - **HTTP**: hyper 1.x with HTTP/1.1 + HTTP/2 support
 - **Actors**: ractor (Erlang-inspired gen_server, supervisor trees)
-- **Databases**: DynamoDB, Redis, FoundationDB, Redis+FDB (generic adapter)
+- **Databases**: DynamoDB, Redis, FoundationDB, Redis+FDB, Cloudflare D1
+  (generic `LedgerStore<A>` trait — same wire protocol regardless of backend)
+- **Deployment**: AWS Lambda + DynamoDB, traditional VM + Redis / FDB,
+  or Cloudflare Containers + D1 (the native hyper binary runs inside a
+  Cloudflare Container; a thin TS edge Worker fronts it and holds the
+  D1 binding — see `deploy/cloudflare-container/`)
 - **Parsing**: nom parser combinators for webcash token validation
 - **Effects**: Free monad pattern for composable, testable ledger operations
 - **Asset traits**: `Asset`, `SplittableAsset`, `TransferableAsset`,

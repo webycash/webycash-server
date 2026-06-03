@@ -30,7 +30,10 @@ members = [
     "crates/server",
     # Proc-macro helper (workspace-only, publish = false)
     "crates/macros",
-    # Flavor binaries (workspace-only, publish = false)
+    # Flavor binaries (workspace-only, publish = false). Each binary is a
+    # plain Linux server (hyper + tokio). For Cloudflare deployment the
+    # same binary runs inside a Cloudflare Container — see
+    # `deploy/cloudflare-container/`.
     "crates/server-webcash",
     "crates/server-rgb",
     "crates/server-rgb-collectible",
@@ -85,6 +88,12 @@ aws-sdk-dynamodb = "1"
 serde_dynamo = { version = "4", features = ["aws-sdk-dynamodb+1"] }
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 foundationdb = { version = "0.10", features = ["embedded-fdb-include", "fdb-7_3"] }
+# Native rusqlite test double for the WorkerProxyStore (dev-only); the
+# in-process tests stand in for D1 by serving the same SQL dialect.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# HTTP client the WorkerProxyStore uses from inside the Cloudflare
+# Container to call back to the Worker that holds the D1 binding.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # Error handling
 thiserror = "2"
@@ -132,7 +141,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "webycash server library — asset-gated ledger (webcash, RGB, voucher) with Redis/DynamoDB/FDB backends"
+description = "webycash server library — asset-gated ledger (webcash, RGB, voucher) with Redis / DynamoDB / FoundationDB / Cloudflare-D1 (via Worker proxy) backends"
 documentation = "https://docs.rs/webycash-server"
 keywords = ["webcash", "payments", "bearer-cash", "rgb", "ledger"]
 categories = ["cryptography::cryptocurrencies", "api-bindings"]
@@ -167,6 +176,11 @@ redis = ["dep:redis"]
 dynamodb = ["dep:aws-config", "dep:aws-sdk-dynamodb", "dep:serde_dynamo"]
 fdb = ["dep:foundationdb"]
 redis-fdb = ["redis", "fdb"]
+# Cloudflare Containers + D1 backend. The native server binary runs inside
+# a Cloudflare Container and reaches D1 by HTTP-calling a thin TS Worker
+# that holds the D1 binding. Wire format defined in
+# `deploy/cloudflare-container/workers/{flavor}/src/index.ts`.
+worker-proxy = ["dep:reqwest"]
 
 [dependencies]
 # Core shared
@@ -183,18 +197,20 @@ uuid = { workspace = true }
 base64 = { workspace = true }
 ed25519-dalek = { workspace = true }
 
-# Server + async
-tokio = { workspace = true }
-ractor = { workspace = true }
+# Async + logging
 futures = { workspace = true }
 tracing = { workspace = true }
 toml = { workspace = true }
 bytes = { workspace = true }
+http = { workspace = true }
 
-# HTTP
+# Server runtime + HTTP — the binary always runs on a real Linux host
+# (bare metal, container, Cloudflare Container, AWS Lambda) with hyper +
+# tokio + ractor. There is no wasm32 target.
+tokio = { workspace = true }
+ractor = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
-http = { workspace = true }
 http-body-util = { workspace = true }
 
 # Optional: OpenPGP V4 cert parsing in auth module
@@ -209,9 +225,14 @@ aws-config = { workspace = true, optional = true }
 aws-sdk-dynamodb = { workspace = true, optional = true }
 serde_dynamo = { workspace = true, optional = true }
 foundationdb = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+# rusqlite test double for the d1 backend (native cfg(test) only)
+rusqlite = { workspace = true }
+# Test-only RNG for the openpgp-gated round-trip test in `auth`.
+rand = { workspace = true }
 
 [package.metadata.docs.rs]
 all-features = true
