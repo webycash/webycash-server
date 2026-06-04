@@ -1,0 +1,125 @@
+# Local server-side stack — INFRASTRUCTURE ONLY (prebuilt off-the-shelf images).
+#
+# This file deliberately contains NO `build:` stanza for any Rust service.
+# A `docker build` would run cargo *inside* a container that the host OOM
+# ps-guard cannot see, which would let two cargo builds run concurrently and
+# crash the machine. The Rust servers (server-webcash / -rgb / -voucher,
+# extro-keyserver, webycash-referee) are built as NATIVE host binaries with
+# `cargo build --release` and launched by `run-local.sh` — NOT here.
+#
+# What this file provides is the faithful Cloudflare emulation substrate:
+#   - redis        → the webcash/rgb/voucher server ledger backend
+#   - minio        → R2 (S3-compatible) object store           [profile: r2]
+#   - dynamodb     → the keyserver's persistent identity store [profile: dynamo]
+#   - bitcoind     → bitcoin regtest base layer                [profile: ark]
+#   - esplora      → block/tx explorer over bitcoind           [profile: ark]
+#
+# D1 is NOT a container: D1 *is* SQLite. The referee opens a local `.sqlite`
+# file directly (`WEBYCASH_REFEREE_DB_PATH`), the exact code path that runs on
+# Cloudflare D1 via the worker-proxy. See run-local.sh.
+#
+# By default ONLY `redis` starts (the sole backend the server-side smoke test
+# exercises). The R2 / DynamoDB / ARK services are profile-gated so a default
+# bring-up doesn't run containers nothing talks to:
+#
+#   docker compose -f docker-compose.local.yml up -d                 # redis only
+#   docker compose -f docker-compose.local.yml --profile r2 up -d    # + minio
+#   docker compose -f docker-compose.local.yml --profile dynamo up -d
+#   docker compose -f docker-compose.local.yml --profile ark up -d   # + bitcoind/esplora
+#
+# Ports (host:container):
+#   redis    → :6391
+#   minio    → :9000 (S3 API) / :9001 (console)   [profile r2]
+#   dynamodb → :8000                              [profile dynamo]
+#   bitcoind → :18443 (regtest RPC)               [profile ark]
+#   esplora  → :3002                              [profile ark]
+
+services:
+  # ── Webcash/RGB/Voucher ledger backend ────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    command: >
+      redis-server --port 6379
+      --save "" --appendonly no --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+    ports: ["6391:6379"]
+    networks: [local]
+
+  # ── R2 emulation (S3-compatible) — keyserver ciphertext-backup bucket ──────
+  # Only the `keyserver-dynamo` build talks to R2; the default keyserver build
+  # used in the server-side smoke test does NOT, so this is profile-gated to
+  # avoid a no-consumer container. The faithful keyserver-persistence path is
+  # `keyserver-dynamo` + this minio + the `dynamo` profile below.
+  minio:
+    profiles: [r2]
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports: ["9000:9000", "9001:9001"]
+    volumes: [minio-data:/data]
+    networks: [local]
+
+  # Create the keyserver backup bucket on startup (R2-faithful bucket name).
+  minio-init:
+    profiles: [r2]
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb -p local/extro-backend-dev-backup &&
+      echo 'R2 bucket extro-backend-dev-backup ready'
+      "
+    networks: [local]
+
+  # ── DynamoDB Local — keyserver persistent identity store (faithful path) ───
+  dynamodb:
+    profiles: [dynamo]
+    image: amazon/dynamodb-local:latest
+    command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
+    ports: ["8000:8000"]
+    networks: [local]
+
+  # ── Bitcoin regtest + esplora — Phase-E bitcoin-ARK base layer ─────────────
+  # The ARK ASP (2-of-2 coordinator) is NOT in this file — see README "ARK ASP
+  # blocker". bitcoind/esplora are the chain substrate an ASP would sit on.
+  bitcoind:
+    profiles: [ark]
+    image: ruimarinho/bitcoin-core:24
+    command: >
+      -regtest=1 -server=1 -txindex=1
+      -rpcbind=0.0.0.0 -rpcallowip=0.0.0.0/0
+      -rpcuser=regtest -rpcpassword=regtest
+      -fallbackfee=0.0002
+    ports: ["18443:18443"]
+    networks: [local]
+
+  esplora:
+    profiles: [ark]
+    image: blockstream/esplora:latest
+    depends_on: [bitcoind]
+    command: >
+      /bin/bash -c "echo 'esplora requires bespoke regtest wiring against bitcoind;
+      see README ARK section before relying on it' && sleep infinity"
+    ports: ["3002:80"]
+    networks: [local]
+
+networks:
+  local:
+    driver: bridge
+
+volumes:
+  minio-data:
