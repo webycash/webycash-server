@@ -25,9 +25,13 @@
 #
 # Honest scope (what runs live here vs the operator's mainnet/signet ARK leg):
 #   LIVE here:  referee /v1/health, /v1/pubkey; real two-proof InitiateRequest
-#               built + POSTed; webcash bearer leg mined on the live server; the
-#               referee's REAL HttpBearerRail spent-status pre→post transition
-#               (the settlement authority) driven against the live server.
+#               built + POSTed (decodes + reaches the real verifier); webcash
+#               bearer leg mined on the live server; the referee's REAL
+#               HttpBearerRail Unspent→Spent read MECHANISM (the settlement-
+#               authority observation) driven against the live server. NOTE: no
+#               swap completes live (initiate 422s at the verifier, below); the
+#               full post-check→settle/refund path is proven IN-PROCESS under the
+#               real BIP327 signer + MockArkSigner (referee `alice_bob_roundtrip`).
 #   GAP (B2c):  the POSTed envelope DECODES and reaches the REAL arkworks
 #               verifier, which returns 422 ZkpRejected. This is CONSISTENT with
 #               the ConditionalLeg/B2c gap: the referee recomputes the CONDITIONAL
@@ -204,8 +208,8 @@ PY
   local R2
   R2=$("$RAIL_PROBE" "$WEBCASH" "$PUBTOKEN")
   [[ "$R2" == "Spent" ]] \
-    && pass "referee HttpBearerRail post-check: Spent (the settlement-authority transition, proven live)" \
-    || fail "post-check expected Spent, got $R2"
+    && pass "referee HttpBearerRail reads Spent after /replace — the rail-client Unspent→Spent mechanism (the settlement-authority observation) proven LIVE. NOTE: no swap exists at this point (initiate 422'd at the verifier); the full post-check→settle path is proven in-process (alice_bob_roundtrip)." \
+    || fail "expected Spent, got $R2"
 }
 
 # ── The round-trip: webcash→ARK, then ARK→webcash (roles swapped) ───────────
@@ -221,12 +225,14 @@ echo "════════════════════════�
 echo "ROUND-TRIP DRIVER COMPLETE ($NETWORK)."
 echo "  Proven LIVE: referee health/pubkey; real two-proof InitiateRequest built,"
 echo "    POSTed, DECODED, and reached the REAL arkworks verifier; webcash bearer"
-echo "    leg mined; the referee's REAL HttpBearerRail spent-status pre→post"
-echo "    transition (the settlement authority)."
-echo "  Remaining: (build) live initiate 422s at the real verifier on the"
-echo "    conditional proof — the B2c 7-input ceremony must land before accept;"
-echo "    (operator) the ARK 2-of-2 VTXO settlement on a real ASP."
-echo "    See ./SWAP-ROUNDTRIP-RUNBOOK.md."
+echo "    leg mined; the referee's REAL HttpBearerRail Unspent→Spent read"
+echo "    mechanism (the settlement-authority observation)."
+echo "  NOT proven live: no swap completes (initiate 422s at the verifier). The"
+echo "    full post-check→settle/refund path is proven IN-PROCESS under the real"
+echo "    BIP327 signer + MockArkSigner (referee alice_bob_roundtrip)."
+echo "  Remaining: (build) the B2c 7-input conditional ceremony before live"
+echo "    initiate accepts; (operator) the ARK 2-of-2 VTXO settlement on a real"
+echo "    ASP. See ./SWAP-ROUNDTRIP-RUNBOOK.md."
 echo "════════════════════════════════════════════════════════════════"
 
 # ─────────────────────────────────────────────────────────────────────────────
