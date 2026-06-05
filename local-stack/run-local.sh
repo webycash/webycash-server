@@ -100,6 +100,18 @@ up() {
   done
   local REDIS_URL="redis://127.0.0.1:6391"
 
+  # Issuer registry for POST /api/v1/issue. The rail servers verify the issuing
+  # wallet's `X-Issuer-Signature` against registered `fingerprint:ed25519_pubkey`
+  # issuers; with none registered the server rejects every issue with HTTP 500
+  # ("issuer registry not configured"). These defaults are the dev wallet's
+  # public issuer identities, derived via the extro-node `DeriveIssuer` command
+  # for the Voucher / RGB families at slot 0 (40-hex fp = first 20 bytes of the
+  # 64-hex Ed25519 verifying key). Authorize a different issuing wallet by
+  # exporting WEBYCASH_VOUCHER_ISSUERS / WEBYCASH_RGB_ISSUERS (`fp:pubkey_hex`,
+  # comma-separated for multiple issuers).
+  local VOUCHER_ISSUERS="${WEBYCASH_VOUCHER_ISSUERS:-1215372420e2a867e122fd82c1728f10e05f0219:1215372420e2a867e122fd82c1728f10e05f02199a289a2ec57d7b308c4603f8}"
+  local RGB_ISSUERS="${WEBYCASH_RGB_ISSUERS:-695027fb31478d3f7d715582820bd6e8c4528110:695027fb31478d3f7d715582820bd6e8c45281102e98aa3eed3893a367c6e137}"
+
   echo "[2/4] webcash/rgb/voucher servers (native, redis-backed)…"
   launch server-webcash "$RUNDIR/server-webcash.log" "$SRV_WEBCASH_BIN" \
     WEBCASH_BIND_ADDR=127.0.0.1:8181 WEBCASH_MODE=testnet WEBCASH_DB_BACKEND=redis \
@@ -107,12 +119,14 @@ up() {
   if [[ -x "$SRV_RGB_BIN" ]]; then
     launch server-rgb "$RUNDIR/server-rgb.log" "$SRV_RGB_BIN" \
       WEBCASH_BIND_ADDR=127.0.0.1:8182 WEBCASH_MODE=testnet WEBCASH_DB_BACKEND=redis \
-      WEBYCASH_MINING_REQUIRED_FOR_ISSUANCE=false REDIS_URL="$REDIS_URL" RUST_LOG=warn
+      WEBYCASH_MINING_REQUIRED_FOR_ISSUANCE=false WEBYCASH_ISSUERS="$RGB_ISSUERS" \
+      REDIS_URL="$REDIS_URL" RUST_LOG=warn
   fi
   if [[ -x "$SRV_VOUCHER_BIN" ]]; then
     launch server-voucher "$RUNDIR/server-voucher.log" "$SRV_VOUCHER_BIN" \
       WEBCASH_BIND_ADDR=127.0.0.1:8183 WEBCASH_MODE=testnet WEBCASH_DB_BACKEND=redis \
-      WEBYCASH_MINING_REQUIRED_FOR_ISSUANCE=false REDIS_URL="$REDIS_URL" RUST_LOG=warn
+      WEBYCASH_MINING_REQUIRED_FOR_ISSUANCE=false WEBYCASH_ISSUERS="$VOUCHER_ISSUERS" \
+      REDIS_URL="$REDIS_URL" RUST_LOG=warn
   fi
   wait_http "http://127.0.0.1:8181/api/v1/target" server-webcash
 

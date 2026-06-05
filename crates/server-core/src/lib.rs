@@ -400,6 +400,7 @@ where
         ("POST", "/api/v1/replace") => handlers::replace_collectible::<A, S>(state, req).await,
         ("POST", "/api/v1/burn") => handlers::burn_collectible::<A, S>(state, req).await,
         ("POST", "/api/v1/issue") => handlers::issue_collectible::<A, S>(state, req).await,
+        ("OPTIONS", _) => cors_preflight(),
         _ => not_found(),
     }
 }
@@ -434,6 +435,7 @@ where
         ("POST", "/api/v1/mining_report") => handlers::mining_report::<A, S>(state, req).await,
         ("POST", "/api/v1/burn") => handlers::burn::<A, S>(state, req).await,
         ("GET", "/api/v1/stats") => handlers::stats::<A, S>(state).await,
+        ("OPTIONS", _) => cors_preflight(),
         _ => not_found(),
     }
 }
@@ -445,6 +447,29 @@ fn not_found() -> ProtoResponse {
         body: Bytes::from_static(
             b"<html><title>404: Not Found</title><body>404: Not Found</body></html>",
         ),
+    }
+}
+
+/// CORS preflight (`OPTIONS *`). Browsers send this before any non-simple
+/// cross-origin request — e.g. the in-browser wallet (extro-node WASM `fetch`)
+/// POSTing `/api/v1/issue` with `content-type` + `x-issuer-signature`. The
+/// matched-route responses already carry `access-control-allow-origin: *`, but
+/// without a preflight that echoes the requested headers the browser blocks the
+/// request before it ever reaches a handler. `allow-headers` therefore widens
+/// past `x-requested-with` to the headers the rails actually send.
+fn cors_preflight() -> ProtoResponse {
+    ProtoResponse {
+        status: StatusCode::NO_CONTENT.as_u16(),
+        headers: vec![
+            ("access-control-allow-origin", "*"),
+            (
+                "access-control-allow-headers",
+                "content-type, x-requested-with, x-issuer-signature",
+            ),
+            ("access-control-allow-methods", "POST, GET, OPTIONS"),
+            ("access-control-max-age", "86400"),
+        ],
+        body: Bytes::new(),
     }
 }
 
