@@ -291,10 +291,19 @@ async fn fetch(mut req: Request, env: Env, _ctx: Context) -> Result<Response> {
         Ok(d) => d,
         Err(e) => return Response::error(format!("no D1 binding: {e}"), 500),
     };
-    let proto = match to_proto(&mut req).await {
+    let mut proto = match to_proto(&mut req).await {
         Ok(p) => p,
         Err(e) => return Response::error(format!("request: {e}"), 400),
     };
+    // Path-proxy: this backend is mounted under `dev.weby.cash/api/<flavor>`.
+    // Strip that prefix so the handler sees its own routes (/api/v1/...).
+    if let Ok(prefix) = env.var("API_PREFIX").map(|v| v.to_string()) {
+        if !prefix.is_empty() {
+            if let Some(rest) = proto.path.strip_prefix(&prefix) {
+                proto.path = if rest.is_empty() { "/".into() } else { rest.into() };
+            }
+        }
+    }
     let resp = SendFuture::new(run(db, proto)).await;
     to_worker(resp)
 }

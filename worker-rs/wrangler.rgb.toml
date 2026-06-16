@@ -12,6 +12,9 @@ binding = "DB"
 database_name = "webycash-cf-rgb-dev"
 database_id = "a5a06134-7282-4839-88aa-a99dbce25a1d"
 
+[vars]
+API_PREFIX = "/api/rgb"
+
 [[routes]]
-pattern = "rgb.dev.weby.cash"
-custom_domain = true
+pattern = "dev.weby.cash/api/rgb/*"
+zone_name = "weby.cash"

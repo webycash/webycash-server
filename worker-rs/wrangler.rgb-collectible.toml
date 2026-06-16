@@ -12,6 +12,9 @@ binding = "DB"
 database_name = "webycash-cf-rgb-collectible-dev"
 database_id = "ea0b6688-60bc-4bfa-84ba-64b25dfdd192"
 
+[vars]
+API_PREFIX = "/api/rgb-collectible"
+
 [[routes]]
-pattern = "rgb-collectible.dev.weby.cash"
-custom_domain = true
+pattern = "dev.weby.cash/api/rgb-collectible/*"
+zone_name = "weby.cash"

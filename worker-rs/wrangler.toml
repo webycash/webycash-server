@@ -12,6 +12,9 @@ binding = "DB"
 database_name = "webycash-cf-webcash-dev"
 database_id = "fd2f2a5e-704c-4931-944a-96d0549438f9"
 
+[vars]
+API_PREFIX = "/api/webcash"
+
 [[routes]]
-pattern = "webcash.dev.weby.cash"
-custom_domain = true
+pattern = "dev.weby.cash/api/webcash/*"
+zone_name = "weby.cash"
