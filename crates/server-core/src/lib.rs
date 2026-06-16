@@ -848,8 +848,8 @@ mod handlers {
         // Server's authoritative clock at the moment of the request.
         // Used for HTLC predicate evaluation + lock-stamp; the wallet
         // has no input. See docs/referee-zkp-based-swap.md §8.
-        let server_now_unix = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let server_now_unix = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
@@ -1286,8 +1286,8 @@ mod handlers {
         // used by the HTLC predicate evaluator (refund-after-timeout
         // path). Wallet's timestamp is ignored. See
         // docs/referee-zkp-based-swap.md §8.
-        let server_now_unix = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let server_now_unix = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
 

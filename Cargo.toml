@@ -191,6 +191,10 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+# Drop-in SystemTime that works on the Workers wasm target (JS Date) and native
+# (std). The replace/HTLC path stamps the server clock; bare std::time panics on
+# wasm32 ("time not implemented") and crashed the worker's /api/v1/replace.
+web-time = "1"
 nom = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
