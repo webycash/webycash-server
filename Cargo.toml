@@ -204,14 +204,11 @@ toml = { workspace = true }
 bytes = { workspace = true }
 http = { workspace = true }
 
-# Server runtime + HTTP — the binary always runs on a real Linux host
-# (bare metal, container, Cloudflare Container, AWS Lambda) with hyper +
-# tokio + ractor. There is no wasm32 target.
-tokio = { workspace = true }
-ractor = { workspace = true }
-hyper = { workspace = true }
-hyper-util = { workspace = true }
-http-body-util = { workspace = true }
+# Server runtime + HTTP — native-only. The hyper/tokio/ractor stack runs on a
+# real Linux host (bare metal, container, AWS Lambda). For the Cloudflare
+# Workers (workers-rs/wasm32) target these are gated out below; the
+# runtime-neutral `route_proto*` handlers + the D1 LedgerStore (in the
+# `worker-rs/` crate) carry the wasm path. See [target.'cfg(...)'] sections.
 
 # Optional: OpenPGP V4 cert parsing in auth module
 pgp = { version = "0.19", optional = true }
@@ -226,6 +223,27 @@ aws-sdk-dynamodb = { workspace = true, optional = true }
 serde_dynamo = { workspace = true, optional = true }
 foundationdb = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
+
+# Native target (everything that is NOT wasm32): the full hyper/tokio/ractor
+# server runtime. The native flavor binaries + Container path use these.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true }
+ractor = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
+
+# wasm32 target (Cloudflare Workers via the worker-rs crate): no server
+# runtime; only tokio's runtime-free `sync` primitives (NonceCache etc.).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Direct (NOT `workspace = true`): the workspace tokio is `features=["full"]`,
+# which `workspace=true` would inherit (pulling `net`→`mio`, unsupported on
+# wasm). wasm needs only the runtime-free `sync` primitives.
+tokio = { version = "1", default-features = false, features = ["sync"] }
+# wasm32 entropy: uuid v4 + the curve25519/ed25519 dep tree need a getrandom
+# js backend; uuid additionally needs its own `js` feature.
+uuid = { workspace = true, features = ["js"] }
+getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
 proptest = { workspace = true }

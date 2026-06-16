@@ -1,0 +1,17 @@
+name = "webycash-webcash-dev"
+main = "build/worker/shim.mjs"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[build]
+command = "worker-build --release"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "webycash-cf-webcash-dev"
+database_id = "fd2f2a5e-704c-4931-944a-96d0549438f9"
+
+[[routes]]
+pattern = "webcash.dev.weby.cash"
+custom_domain = true

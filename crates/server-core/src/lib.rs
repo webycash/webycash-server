@@ -35,12 +35,22 @@ use crate::storage::{
 use bytes::Bytes;
 use http::StatusCode;
 
+// Native hyper/tokio HTTP boundary — gated out of the wasm32 (Cloudflare
+// Workers) build, which drives the runtime-neutral `route_proto*` handlers
+// from the worker-rs crate instead.
+#[cfg(not(target_arch = "wasm32"))]
 use std::convert::Infallible;
+#[cfg(not(target_arch = "wasm32"))]
 use http_body_util::{BodyExt, Full};
+#[cfg(not(target_arch = "wasm32"))]
 use hyper::body::Incoming;
+#[cfg(not(target_arch = "wasm32"))]
 use hyper::service::service_fn;
+#[cfg(not(target_arch = "wasm32"))]
 use hyper::{Request, Response};
+#[cfg(not(target_arch = "wasm32"))]
 use hyper_util::rt::{TokioExecutor, TokioIo};
+#[cfg(not(target_arch = "wasm32"))]
 use hyper_util::server::conn::auto::Builder;
 
 const MAX_BODY_BYTES: usize = 1024 * 1024; // 1 MB — matches legacy server
@@ -86,6 +96,7 @@ pub struct ProtoResponse {
 
 /// Collect a `hyper::Request<Incoming>` into a [`ProtoRequest`]. Drains
 /// the body upfront so the inner handler is purely synchronous-from-bytes.
+#[cfg(not(target_arch = "wasm32"))]
 async fn from_hyper(req: Request<Incoming>) -> Result<ProtoRequest, hyper::Error> {
     let (parts, body_inc) = req.into_parts();
     let body = body_inc.collect().await?.to_bytes();
@@ -107,6 +118,7 @@ async fn from_hyper(req: Request<Incoming>) -> Result<ProtoRequest, hyper::Error
 }
 
 /// Convert a [`ProtoResponse`] into a hyper response.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn proto_to_hyper(resp: ProtoResponse) -> Response<Full<Bytes>> {
     let mut builder = Response::builder().status(resp.status);
     for (k, v) in &resp.headers {
@@ -197,6 +209,7 @@ impl<A: Asset, S: LedgerStore<A>> Server<A, S> {
 ///
 /// Native-only — the Cloudflare Workers binaries call [`route_proto`]
 /// directly from a `#[event(fetch)]` entry point.
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn serve<A, S>(server: Server<A, S>) -> anyhow::Result<()>
 where
     A: Asset + MintableAsset + SplittableAsset + RecordBuilder + crate::asset_core::ReplaceHook,
@@ -230,6 +243,7 @@ where
 /// otherwise the handler returns 503.
 ///
 /// Native-only — see [`route_proto_issued`] for the runtime-neutral entry.
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn serve_issued<A, S>(server: Server<A, S>) -> anyhow::Result<()>
 where
     A: Asset
@@ -262,6 +276,7 @@ where
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn route_issued<A, S>(state: &Server<A, S>, req: Request<Incoming>) -> Response<Full<Bytes>>
 where
     A: Asset
@@ -319,6 +334,7 @@ where
 ///
 /// Native-only — see [`route_proto_collectible`] for the runtime-neutral
 /// entry.
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn serve_collectible<A, S>(server: Server<A, S>) -> anyhow::Result<()>
 where
     A: Asset
@@ -350,6 +366,7 @@ where
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn route_collectible<A, S>(
     state: &Server<A, S>,
     req: Request<Incoming>,
@@ -405,6 +422,7 @@ where
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn route<A, S>(state: &Server<A, S>, req: Request<Incoming>) -> Response<Full<Bytes>>
 where
     A: Asset + MintableAsset + SplittableAsset + RecordBuilder + crate::asset_core::ReplaceHook,
