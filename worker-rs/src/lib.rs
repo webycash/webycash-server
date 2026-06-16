@@ -25,11 +25,10 @@ use worker::wasm_bindgen::JsValue;
 use worker::*;
 
 use webycash_server::asset_core::Asset;
-use webycash_server::asset_webcash::Webcash;
-use webycash_server::server_core::{route_proto, ProtoRequest, ProtoResponse, ServeConfig, Server};
+use webycash_server::server_core::{ProtoRequest, ProtoResponse, ServeConfig, Server};
 use webycash_server::storage::{
     BurnRecord, HashRecord, KeyStrategy, LedgerStore, MiningState, Namespace, ReplaceOp,
-    ReplaceResult, WebcashLegacyKeys,
+    ReplaceResult,
 };
 
 // ── D1 SQL (inlined; the facade's `d1_sql` module is private/feature-gated) ──
@@ -296,12 +295,50 @@ async fn fetch(mut req: Request, env: Env, _ctx: Context) -> Result<Response> {
         Ok(p) => p,
         Err(e) => return Response::error(format!("request: {e}"), 400),
     };
+    let resp = SendFuture::new(run(db, proto)).await;
+    to_worker(resp)
+}
 
-    // Webcash flavor: flat keyspace, no issuers, splittable route.
+// ── flavor dispatch (exactly one compiled per deployment) ──
+
+#[cfg(feature = "webcash")]
+async fn run(db: D1Database, proto: ProtoRequest) -> ProtoResponse {
+    use webycash_server::asset_webcash::Webcash;
+    use webycash_server::server_core::route_proto;
+    use webycash_server::storage::WebcashLegacyKeys;
     let store = D1Store::<Webcash, WebcashLegacyKeys>::new(db, WebcashLegacyKeys);
     let server = Server::<Webcash, _>::new(ServeConfig::testnet_default(), store);
-    let resp = SendFuture::new(route_proto(&server, &proto)).await;
-    to_worker(resp)
+    route_proto(&server, &proto).await
+}
+
+#[cfg(feature = "voucher")]
+async fn run(db: D1Database, proto: ProtoRequest) -> ProtoResponse {
+    use webycash_server::asset_voucher::Voucher;
+    use webycash_server::server_core::route_proto_issued;
+    use webycash_server::storage::NamespacedKeys;
+    let store = D1Store::<Voucher, NamespacedKeys>::new(db, NamespacedKeys);
+    let server = Server::<Voucher, _>::new(ServeConfig::testnet_default(), store);
+    route_proto_issued(&server, &proto).await
+}
+
+#[cfg(feature = "rgb")]
+async fn run(db: D1Database, proto: ProtoRequest) -> ProtoResponse {
+    use webycash_server::asset_rgb::RgbFungible;
+    use webycash_server::server_core::route_proto_issued;
+    use webycash_server::storage::NamespacedKeys;
+    let store = D1Store::<RgbFungible, NamespacedKeys>::new(db, NamespacedKeys);
+    let server = Server::<RgbFungible, _>::new(ServeConfig::testnet_default(), store);
+    route_proto_issued(&server, &proto).await
+}
+
+#[cfg(feature = "rgb-collectible")]
+async fn run(db: D1Database, proto: ProtoRequest) -> ProtoResponse {
+    use webycash_server::asset_rgb::RgbCollectible;
+    use webycash_server::server_core::route_proto_collectible;
+    use webycash_server::storage::NamespacedKeys;
+    let store = D1Store::<RgbCollectible, NamespacedKeys>::new(db, NamespacedKeys);
+    let server = Server::<RgbCollectible, _>::new(ServeConfig::testnet_default(), store);
+    route_proto_collectible(&server, &proto).await
 }
 
 async fn to_proto(req: &mut Request) -> Result<ProtoRequest> {

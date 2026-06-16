@@ -1,0 +1,17 @@
+name = "webycash-rgb-collectible-dev"
+main = "build/worker/shim.mjs"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[build]
+command = "worker-build --release -- --no-default-features --features rgb-collectible"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "webycash-cf-rgb-collectible-dev"
+database_id = "ea0b6688-60bc-4bfa-84ba-64b25dfdd192"
+
+[[routes]]
+pattern = "rgb-collectible.dev.weby.cash"
+custom_domain = true

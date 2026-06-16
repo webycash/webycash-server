@@ -14,7 +14,12 @@ crate-type = ["cdylib"]
 
 [features]
 default = ["webcash"]
+# Exactly one flavor per deployment (selected via the per-flavor wrangler
+# config's `[build] command`). Each maps to the facade's asset feature.
 webcash = ["webycash-server/webcash"]
+voucher = ["webycash-server/voucher"]
+rgb = ["webycash-server/rgb"]
+rgb-collectible = ["webycash-server/rgb"]
 
 [dependencies]
 worker = { version = "0.8", features = ["d1"] }
