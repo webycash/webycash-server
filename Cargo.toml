@@ -8,10 +8,12 @@ resolver = "2"
 #   cargo build -p webycash-server-rgb       → adds RgbFungible binary
 #   cargo build -p webycash-server-rgb-collectible → adds RgbCollectible binary
 #   cargo build -p webycash-server-voucher   → adds Voucher binary
-#   cargo build -p referee                   → adds the referee binary
-#                                              (Webcash ↔ ARK swap helper;
-#                                              docs/referee-zkp-based-swap.md §4)
 #   cargo build --workspace                  → builds everything
+#
+# The referee is NOT part of this workspace. It is the standalone
+# `webycash/webycash-referee` crate (the single canonical referee, with the
+# Cloudflare-Container deploy path). The former embedded `referee/` copy was a
+# dead duplicate and has been removed.
 #
 # Library sub-crates (proto, asset-core, auth, storage, compute, mining,
 # asset-webcash, asset-rgb, asset-voucher, server-core) are inlined as modules
@@ -40,8 +42,6 @@ members = [
     "crates/server-voucher",
     # Wire-format conformance test suite (workspace-only, publish = false)
     "crates/conformance",
-    # Webcash ↔ Bitcoin ARK swap helper (workspace-only, publish = false)
-    "referee",
 ]
 
 [workspace.package]

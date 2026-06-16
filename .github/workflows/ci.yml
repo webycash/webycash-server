@@ -36,20 +36,15 @@ jobs:
       - name: Clippy (default — webcash-only)
         run: cargo clippy --all-targets -- -W clippy::all
 
-      - name: Clippy (referee)
-        run: cargo clippy -p referee --all-targets -- -W clippy::all
-
-      - name: Build all asset binaries + referee
+      - name: Build all asset binaries
         run: |
           cargo build -p webycash-server-webcash
           cargo build -p webycash-server-rgb
           cargo build -p webycash-server-rgb-collectible
           cargo build -p webycash-server-voucher
-          cargo build -p referee
 
       - name: Unit + property tests (no docker required)
         run: |
-          cargo test -p referee
           cargo test -p webycash-conformance \
             --test record_codec_props \
             --test wire_format_props \
@@ -122,9 +117,6 @@ jobs:
           cargo build --release --target ${{ matrix.target }} -p webycash-server-rgb
           cargo build --release --target ${{ matrix.target }} -p webycash-server-rgb-collectible
           cargo build --release --target ${{ matrix.target }} -p webycash-server-voucher
-          # Referee builds with its production crypto features.
-          cargo build --release --target ${{ matrix.target }} -p referee \
-            --features zkp-arkworks,musig2-real
 
       - name: Package release
         shell: bash
@@ -134,7 +126,7 @@ jobs:
           STAGING="webycash-server-${VERSION}-${TARGET}"
           mkdir -p "$STAGING"
           cp LICENSE README.md "$STAGING/" 2>/dev/null || true
-          for bin in webycash-server-webcash webycash-server-rgb webycash-server-rgb-collectible webycash-server-voucher referee; do
+          for bin in webycash-server-webcash webycash-server-rgb webycash-server-rgb-collectible webycash-server-voucher; do
             cp "target/${TARGET}/release/${bin}" "$STAGING/"
           done
           tar czf "${STAGING}.tar.gz" "$STAGING"
