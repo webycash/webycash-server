@@ -28,8 +28,6 @@ members = [
     ".",
     # Published separately — WASM client-side AluVM runtime for webylib
     "crates/aluvm-runtime",
-    # Legacy monolithic server (ractor-based; workspace-only, publish = false)
-    "crates/server",
     # Proc-macro helper (workspace-only, publish = false)
     "crates/macros",
     # Flavor binaries (workspace-only, publish = false). Each binary is a
@@ -43,6 +41,11 @@ members = [
     # Wire-format conformance test suite (workspace-only, publish = false)
     "crates/conformance",
 ]
+
+# Historical ractor monolith retained for source archaeology only. It still
+# imports the pre-split `webycash_server` crate name and is not a release input;
+# keeping it outside the workspace prevents it from invalidating rail builds.
+exclude = ["crates/server"]
 
 [workspace.package]
 version = "0.3.3"

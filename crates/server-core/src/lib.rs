@@ -53,6 +53,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 #[cfg(not(target_arch = "wasm32"))]
 use hyper_util::server::conn::auto::Builder;
 
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_BODY_BYTES: usize = 1024 * 1024; // 1 MB — matches legacy server
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -2,6 +2,8 @@
 **/target/
 **/*.rs.bk
 Cargo.lock
+!Cargo.lock
+!worker-rs/Cargo.lock
 .DS_Store
 *.swp
 *.swo
