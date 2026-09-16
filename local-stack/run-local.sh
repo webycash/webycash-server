@@ -102,7 +102,7 @@ launch() {  # name, logfile, binary, [env KEY=VAL ...]
 up() {
   require_bin "$SRV_WEBCASH_BIN" "cd $SERVER_REPO && cargo build --release -p webycash-server-webcash"
   require_bin "$KEYSERVER_BIN"   "cd $KEYSERVER_REPO && cargo build --release --bin extro-keyserver"
-  require_bin "$REFEREE_BIN"     "cd $REFEREE_REPO && cargo build --release --features zkp-arkworks,musig2-real"
+  require_bin "$REFEREE_BIN"     "cd $REFEREE_REPO && cargo build --release --features zkp-arkworks,musig2-real,ark-asp"
   ensure_dev_keys
 
   echo "[1/4] redis (ledger backend)…"
