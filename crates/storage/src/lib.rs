@@ -32,6 +32,15 @@ pub mod redis_backend;
 #[cfg(all(feature = "redis", feature = "fdb"))]
 pub mod redis_fdb_backend;
 
+// Cloudflare Containers deployment path: the native binary runs inside a
+// Container and reaches Cloudflare D1 by HTTP-calling a thin TS Worker
+// that holds the D1 binding. SQL constants live in `d1_sql`; the
+// LedgerStore impl lives in `worker_proxy_backend`.
+#[cfg(feature = "worker-proxy")]
+mod d1_sql;
+#[cfg(feature = "worker-proxy")]
+pub mod worker_proxy_backend;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Audit + stats record types
 // ─────────────────────────────────────────────────────────────────────────────

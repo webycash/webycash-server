@@ -283,3 +283,43 @@ curl -fsS https://referee.example/v1/pubkey | jq .
 ```
 
 A passing smoke run is the deploy gate.
+
+## Cloudflare Containers + D1
+
+Cloudflare deployment path (the Lambda-equivalent: a native Linux Docker
+container on Cloudflare's network). The existing native hyper binary
+runs inside a Cloudflare Container with `WEBCASH_DB_BACKEND=worker_proxy`;
+a thin TS edge Worker fronts the Container and holds the D1 binding.
+The Container reaches D1 by HTTP-calling the Worker's `/__d1/batch`
+endpoint.
+
+```
+        Internet                Cloudflare edge
+   client ──────► Worker (TS)                       Container (Linux)
+                   │                                  ┌──────────────────────┐
+                   ├── /__d1/batch ◄──── HTTP ──────  │ webycash-server-X    │
+                   │     │                            │  (hyper + tokio)     │
+                   │     └─► D1 (SQLite)              │  WorkerProxyStore    │
+                   │                                  └──────────────────────┘
+                   └── /*  ─────► Container.fetch(req)
+```
+
+Per-flavor wrangler configs:
+[`deploy/cloudflare-container/workers/{webcash,rgb,rgb-collectible,voucher}/wrangler.toml`](../deploy/cloudflare-container/workers/).
+Shared schema migration:
+[`deploy/cloudflare-container/migrations/0001_initial.sql`](../deploy/cloudflare-container/migrations/0001_initial.sql).
+Container images: [`Dockerfile.cf-{flavor}`](../) at the repo root (build
+context = full source tree; BuildKit cache mounts share the cargo target
+dir across flavors).
+
+See [`deploy/cloudflare-container/README.md`](../deploy/cloudflare-container/README.md)
+for the full provisioning + deploy lifecycle (`wrangler login` →
+`wrangler d1 create` → `wrangler d1 migrations apply` → `wrangler deploy`).
+
+D1 atomicity primitives: a `BEFORE UPDATE OF spent` trigger on `tokens`
+(double-spend) and an `INSTEAD OF INSERT` view trigger on
+`assert_token_exists` (missing-input) turn would-be-silent zero-row
+conditions inside `db.batch(stmts)` into real `ABORT`s that roll the
+whole batch back. The Container's `WorkerProxyStore` maps the abort
+message back to a `ReplaceResult::Failed("double_spend" |
+"input_missing" | "output_collision" | …)` diagnostic.

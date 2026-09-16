@@ -8,10 +8,12 @@ resolver = "2"
 #   cargo build -p webycash-server-rgb       → adds RgbFungible binary
 #   cargo build -p webycash-server-rgb-collectible → adds RgbCollectible binary
 #   cargo build -p webycash-server-voucher   → adds Voucher binary
-#   cargo build -p referee                   → adds the referee binary
-#                                              (Webcash ↔ ARK swap helper;
-#                                              docs/referee-zkp-based-swap.md §4)
 #   cargo build --workspace                  → builds everything
+#
+# The referee is NOT part of this workspace. It is the standalone
+# `webycash/webycash-referee` crate (the single canonical referee, with the
+# Cloudflare-Container deploy path). The former embedded `referee/` copy was a
+# dead duplicate and has been removed.
 #
 # Library sub-crates (proto, asset-core, auth, storage, compute, mining,
 # asset-webcash, asset-rgb, asset-voucher, server-core) are inlined as modules
@@ -26,20 +28,24 @@ members = [
     ".",
     # Published separately — WASM client-side AluVM runtime for webylib
     "crates/aluvm-runtime",
-    # Legacy monolithic server (ractor-based; workspace-only, publish = false)
-    "crates/server",
     # Proc-macro helper (workspace-only, publish = false)
     "crates/macros",
-    # Flavor binaries (workspace-only, publish = false)
+    # Flavor binaries (workspace-only, publish = false). Each binary is a
+    # plain Linux server (hyper + tokio). For Cloudflare deployment the
+    # same binary runs inside a Cloudflare Container — see
+    # `deploy/cloudflare-container/`.
     "crates/server-webcash",
     "crates/server-rgb",
     "crates/server-rgb-collectible",
     "crates/server-voucher",
     # Wire-format conformance test suite (workspace-only, publish = false)
     "crates/conformance",
-    # Webcash ↔ Bitcoin ARK swap helper (workspace-only, publish = false)
-    "referee",
 ]
+
+# Historical ractor monolith retained for source archaeology only. It still
+# imports the pre-split `webycash_server` crate name and is not a release input;
+# keeping it outside the workspace prevents it from invalidating rail builds.
+exclude = ["crates/server"]
 
 [workspace.package]
 version = "0.3.3"
@@ -85,6 +91,12 @@ aws-sdk-dynamodb = "1"
 serde_dynamo = { version = "4", features = ["aws-sdk-dynamodb+1"] }
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 foundationdb = { version = "0.10", features = ["embedded-fdb-include", "fdb-7_3"] }
+# Native rusqlite test double for the WorkerProxyStore (dev-only); the
+# in-process tests stand in for D1 by serving the same SQL dialect.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# HTTP client the WorkerProxyStore uses from inside the Cloudflare
+# Container to call back to the Worker that holds the D1 binding.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # Error handling
 thiserror = "2"
@@ -132,7 +144,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "webycash server library — asset-gated ledger (webcash, RGB, voucher) with Redis/DynamoDB/FDB backends"
+description = "webycash server library — asset-gated ledger (webcash, RGB, voucher) with Redis / DynamoDB / FoundationDB / Cloudflare-D1 (via Worker proxy) backends"
 documentation = "https://docs.rs/webycash-server"
 keywords = ["webcash", "payments", "bearer-cash", "rgb", "ledger"]
 categories = ["cryptography::cryptocurrencies", "api-bindings"]
@@ -167,6 +179,11 @@ redis = ["dep:redis"]
 dynamodb = ["dep:aws-config", "dep:aws-sdk-dynamodb", "dep:serde_dynamo"]
 fdb = ["dep:foundationdb"]
 redis-fdb = ["redis", "fdb"]
+# Cloudflare Containers + D1 backend. The native server binary runs inside
+# a Cloudflare Container and reaches D1 by HTTP-calling a thin TS Worker
+# that holds the D1 binding. Wire format defined in
+# `deploy/cloudflare-container/workers/{flavor}/src/index.ts`.
+worker-proxy = ["dep:reqwest"]
 
 [dependencies]
 # Core shared
@@ -177,25 +194,28 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+# Drop-in SystemTime that works on the Workers wasm target (JS Date) and native
+# (std). The replace/HTLC path stamps the server clock; bare std::time panics on
+# wasm32 ("time not implemented") and crashed the worker's /api/v1/replace.
+web-time = "1"
 nom = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 base64 = { workspace = true }
 ed25519-dalek = { workspace = true }
 
-# Server + async
-tokio = { workspace = true }
-ractor = { workspace = true }
+# Async + logging
 futures = { workspace = true }
 tracing = { workspace = true }
 toml = { workspace = true }
 bytes = { workspace = true }
-
-# HTTP
-hyper = { workspace = true }
-hyper-util = { workspace = true }
 http = { workspace = true }
-http-body-util = { workspace = true }
+
+# Server runtime + HTTP — native-only. The hyper/tokio/ractor stack runs on a
+# real Linux host (bare metal, container, AWS Lambda). For the Cloudflare
+# Workers (workers-rs/wasm32) target these are gated out below; the
+# runtime-neutral `route_proto*` handlers + the D1 LedgerStore (in the
+# `worker-rs/` crate) carry the wasm path. See [target.'cfg(...)'] sections.
 
 # Optional: OpenPGP V4 cert parsing in auth module
 pgp = { version = "0.19", optional = true }
@@ -209,9 +229,35 @@ aws-config = { workspace = true, optional = true }
 aws-sdk-dynamodb = { workspace = true, optional = true }
 serde_dynamo = { workspace = true, optional = true }
 foundationdb = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+
+# Native target (everything that is NOT wasm32): the full hyper/tokio/ractor
+# server runtime. The native flavor binaries + Container path use these.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true }
+ractor = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
+
+# wasm32 target (Cloudflare Workers via the worker-rs crate): no server
+# runtime; only tokio's runtime-free `sync` primitives (NonceCache etc.).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Direct (NOT `workspace = true`): the workspace tokio is `features=["full"]`,
+# which `workspace=true` would inherit (pulling `net`→`mio`, unsupported on
+# wasm). wasm needs only the runtime-free `sync` primitives.
+tokio = { version = "1", default-features = false, features = ["sync"] }
+# wasm32 entropy: uuid v4 + the curve25519/ed25519 dep tree need a getrandom
+# js backend; uuid additionally needs its own `js` feature.
+uuid = { workspace = true, features = ["js"] }
+getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
 proptest = { workspace = true }
+# rusqlite test double for the d1 backend (native cfg(test) only)
+rusqlite = { workspace = true }
+# Test-only RNG for the openpgp-gated round-trip test in `auth`.
+rand = { workspace = true }
 
 [package.metadata.docs.rs]
 all-features = true

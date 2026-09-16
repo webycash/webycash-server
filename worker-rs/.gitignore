@@ -1,0 +1,3 @@
+worker-rs/build/
+worker-rs/target/
+worker-rs/Cargo.lock

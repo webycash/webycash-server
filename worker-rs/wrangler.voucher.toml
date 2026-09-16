@@ -1,0 +1,20 @@
+name = "webycash-voucher-dev"
+main = "build/worker/shim.mjs"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[build]
+command = "worker-build --release -- --no-default-features --features voucher"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "webycash-cf-voucher-dev"
+database_id = "e04df0fa-47dd-4ec4-915d-ec6d446edd6f"
+
+[vars]
+API_PREFIX = "/api/voucher"
+
+[[routes]]
+pattern = "dev.weby.cash/api/voucher/*"
+zone_name = "weby.cash"

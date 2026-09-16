@@ -15,6 +15,7 @@ use webycash_server::storage::fdb_backend::FdbStore;
 use webycash_server::storage::redis_backend::RedisStore;
 #[cfg(feature = "fdb")]
 use webycash_server::storage::redis_fdb_backend::RedisFdbStore;
+use webycash_server::storage::worker_proxy_backend::WorkerProxyStore;
 use webycash_server::storage::NamespacedKeys;
 
 #[tokio::main]
@@ -116,6 +117,15 @@ async fn main() -> anyhow::Result<()> {
                 .ensure_tables()
                 .await
                 .context("ensure_tables on DynamoDB")?;
+            finish!(store)
+        }
+        "worker_proxy" => {
+            let worker_url = std::env::var("WORKER_PROXY_URL").with_context(|| {
+                "WORKER_PROXY_URL must be set when WEBCASH_DB_BACKEND=worker_proxy"
+            })?;
+            let auth_token = std::env::var("WORKER_PROXY_AUTH_TOKEN").ok();
+            let store =
+                WorkerProxyStore::<RgbFungible, _>::new(worker_url, auth_token, NamespacedKeys);
             finish!(store)
         }
         #[cfg(feature = "fdb")]

@@ -1,0 +1,34 @@
+# Cloudflare Containers image for the Webcash flavor of webycash-server.
+#
+# Built and pushed by `wrangler deploy` against the [[containers]] binding
+# in deploy/cloudflare-container/workers/webcash/wrangler.toml. The
+# container runs the native hyper binary with WEBCASH_DB_BACKEND=worker_proxy,
+# so it reaches D1 by HTTP-calling the same Worker that proxied the
+# request in (loopback service binding).
+
+FROM rust:1.92-alpine AS build
+RUN apk add --no-cache musl-dev pkgconfig openssl-dev openssl-libs-static
+WORKDIR /app
+COPY . .
+# BuildKit cache mounts: the cargo registry + target dir survive across
+# image builds (and across flavors), so the per-flavor build hits a warm
+# cache on every run after the first.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --release -p webycash-server-webcash \
+    && strip target/release/webycash-server-webcash \
+    && cp target/release/webycash-server-webcash /server
+
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates wget
+COPY --from=build /server /usr/local/bin/server
+EXPOSE 8080
+ENV WEBCASH_BIND_ADDR=0.0.0.0:8080 \
+    WEBCASH_DB_BACKEND=worker_proxy \
+    WEBCASH_MODE=testnet \
+    RUST_LOG=info
+
+HEALTHCHECK --interval=15s --timeout=3s --start-period=8s --retries=3 \
+    CMD wget -q -O - http://127.0.0.1:8080/api/v1/target | grep -q difficulty_target_bits || exit 1
+
+ENTRYPOINT ["server"]

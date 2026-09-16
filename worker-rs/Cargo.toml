@@ -1,0 +1,42 @@
+[package]
+name = "webycash-server-worker"
+version = "0.0.1"
+edition = "2021"
+description = "webycash-server asset flavors on Cloudflare Workers (workers-rs) + native D1. Drives the facade's runtime-neutral route_proto* handlers; storage is a direct D1 LedgerStore (no /__d1 HTTP proxy)."
+publish = false
+
+# Standalone workspace: this crate lives inside the webycash-server workspace
+# dir but is built independently (wasm cdylib), so it opts out of that workspace.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default = ["webcash"]
+# Exactly one flavor per deployment (selected via the per-flavor wrangler
+# config's `[build] command`). Each maps to the facade's asset feature.
+webcash = ["webycash-server/webcash"]
+voucher = ["webycash-server/voucher"]
+rgb = ["webycash-server/rgb"]
+rgb-collectible = ["webycash-server/rgb"]
+
+[dependencies]
+worker = { version = "0.8", features = ["d1"] }
+# Facade: runtime-neutral handlers + asset logic + storage traits, compiled to
+# wasm32 (native hyper/tokio/ractor gated out — see facade Cargo.toml).
+webycash-server = { path = "..", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+bytes = "1"
+async-trait = "0.1"
+# D1Database is a !Send JsValue handle; SendWrapper makes the LedgerStore impl
+# satisfy the trait's `Send + Sync` bound (single-threaded Workers runtime).
+send_wrapper = "0.6"
+getrandom = { version = "0.2", features = ["js"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
