@@ -146,3 +146,91 @@ build time. See CHANGELOG `[Unreleased]` for full details.
 - [ ] Vendored RGB20 / RGB21 Contractum schemas + AluVM bytecode
 - [x] Webcash::build_records: preimage parsed in-trait
   (asset-webcash now has zero Unimplemented stubs)
+
+## v0.5.0 — Cloudflare Containers deployment path
+
+Adds Cloudflare as a deployment target alongside AWS Lambda + DynamoDB
+and traditional VM + Redis / FDB. The native hyper binary runs inside a
+**Cloudflare Container** (Cloudflare's Lambda-equivalent) and reaches D1
+through a thin TS edge Worker that holds the binding.
+
+```
+Internet → Cloudflare edge
+              │
+              ▼
+     Edge Worker (TS) ──fetch──► Container (native hyper binary)
+            │                       │
+            │ /__d1/batch ◄──HTTP── WorkerProxyStore
+            ▼
+            D1 (SQLite)
+```
+
+Same wire protocol, same `LedgerStore<A>` trait, same `Server<A: Asset, S>`
+shape — the existing native binary picks up a new `WEBCASH_DB_BACKEND=worker_proxy`
+case and otherwise runs unchanged.
+
+### WorkerProxyStore (`crates/storage/src/worker_proxy_backend.rs`)
+- [x] `WorkerProxyStore<A, K>` `LedgerStore<A>` impl — serializes batched
+  D1 statements as JSON, POSTs them to `${WORKER_PROXY_URL}/__d1/batch`,
+  parses the row arrays back
+- [x] Shared SQL constants in `crates/storage/src/d1_sql.rs`:
+  `INSERT_TOKEN`, `UPDATE_SPENT`, `ASSERT_TOKEN_EXISTS`, `INSERT_AUDIT`,
+  `UPSERT_MINING_STATE`, `SELECT_MINING_STATE`
+- [x] Schema: `deploy/cloudflare-container/migrations/0001_initial.sql` —
+  `tokens` / `mining_state` / `audit_log` tables + `BEFORE UPDATE OF spent`
+  trigger (double-spend) + `INSTEAD OF INSERT` view trigger on
+  `assert_token_exists` (missing-input) — both turn would-be-silent
+  zero-row conditions into real `ABORT`s inside `db.batch(stmts)`
+- [x] 5 in-process tests against an in-test hyper server backed by
+  rusqlite — proves the wire protocol + SQL atomicity primitives
+  round-trip cleanly without any Cloudflare infrastructure
+
+### Server-core neutrality
+- [x] `ProtoRequest` / `ProtoResponse` envelope — handlers are plain
+  `(state, &ProtoRequest) -> ProtoResponse`, the hyper boundary
+  (`from_hyper` + `proto_to_hyper`) only touches the wire types
+- [x] `route_proto` / `route_proto_issued` / `route_proto_collectible`
+  expose the routing as runtime-neutral functions; `serve*` API unchanged
+
+### Native binaries
+- [x] All 4 flavor binaries pull in `webycash-server` with the
+  `worker-proxy` feature
+- [x] `WEBCASH_DB_BACKEND=worker_proxy` case in each `main.rs` reads
+  `WORKER_PROXY_URL` (required) + optional `WORKER_PROXY_AUTH_TOKEN`
+
+### Container + edge Worker infrastructure
+- [x] `Dockerfile.cf-{webcash,rgb,rgb-collectible,voucher}` at repo
+  root so the docker build context is the full source tree; BuildKit
+  cache mounts on `--mount=type=cache,target=/usr/local/cargo/registry`
+  and `target=/app/target` so flavor-to-flavor builds reuse cargo work
+- [x] 4 TS edge Workers in `deploy/cloudflare-container/workers/{flavor}/`
+  each using `@cloudflare/containers` `Container<Env>` subclass:
+  `/__d1/batch` is served by the Worker, every other path forwards to
+  the Container via `WEBYCASH_CONTAINER.idFromName("primary").fetch(request)`
+- [x] Container `envVars` set in the constructor from the Worker's env:
+  `WORKER_PROXY_URL` (loopback), `WEBYCASH_ISSUERS`, `WEBYCASH_ISSUER_PGP_CERTS`
+- [x] `deploy/cloudflare-container/migrations/0001_initial.sql` referenced
+  by all 4 wrangler.toml configs
+- [x] `deploy/cloudflare-container/README.md` documents the full
+  provisioning + deploy lifecycle
+
+### Conformance — all 4 flavors PASSED end-to-end
+- [x] `server_webcash_container_d1_lifecycle.rs` — 911 s. Mining → health_check
+  → replace → **concurrent-replace adversary** (proves the trigger-based
+  ABORT survives Container → Worker → D1 → SQLite trigger → response
+  round-trip)
+- [x] `server_rgb_container_d1_lifecycle.rs` — 935 s. Mining → replace →
+  cross-contract rejection
+- [x] `server_voucher_container_d1_lifecycle.rs` — 931 s. Signed `/issue`
+  (deterministic Ed25519 via `wrangler dev --var WEBYCASH_ISSUERS:fp:hex`)
+  → health_check → replace → nonce-replay rejection
+- [x] `server_rgb_collectible_container_d1_lifecycle.rs` — 905 s. Signed
+  `/issue` → 1:1 collectible replace → cross-contract rejection → `/burn`
+
+### Open follow-ups
+- [ ] CI matrix: per-flavor `docker build -f Dockerfile.cf-{flavor} .`
+  warm-cache build pinned to a base image hash, then `wrangler deploy`
+  to a testnet account
+- [ ] Optional `WORKER_PROXY_AUTH_TOKEN` Bearer-token validation in the
+  TS Worker's `/__d1/batch` handler (currently the Container ↔ Worker
+  loopback is trusted via the Cloudflare network boundary)

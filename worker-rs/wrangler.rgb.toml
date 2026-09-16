@@ -1,0 +1,20 @@
+name = "webycash-rgb-dev"
+main = "build/worker/shim.mjs"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[build]
+command = "worker-build --release -- --no-default-features --features rgb"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "webycash-cf-rgb-dev"
+database_id = "a5a06134-7282-4839-88aa-a99dbce25a1d"
+
+[vars]
+API_PREFIX = "/api/rgb"
+
+[[routes]]
+pattern = "dev.weby.cash/api/rgb/*"
+zone_name = "weby.cash"

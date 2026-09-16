@@ -22,6 +22,7 @@ use webycash_server::storage::fdb_backend::FdbStore;
 use webycash_server::storage::redis_backend::RedisStore;
 #[cfg(feature = "fdb")]
 use webycash_server::storage::redis_fdb_backend::RedisFdbStore;
+use webycash_server::storage::worker_proxy_backend::WorkerProxyStore;
 use webycash_server::storage::WebcashLegacyKeys;
 
 #[tokio::main]
@@ -86,6 +87,18 @@ async fn main() -> anyhow::Result<()> {
                 .context("ensure_tables on DynamoDB")?;
             serve(Server::new(cfg, store)).await
         }
+        "worker_proxy" => {
+            // Cloudflare Containers path: this binary runs inside a
+            // Docker container; D1 is reached via the thin Worker that
+            // hosts the binding at $WORKER_PROXY_URL.
+            let worker_url = std::env::var("WORKER_PROXY_URL").with_context(|| {
+                "WORKER_PROXY_URL must be set when WEBCASH_DB_BACKEND=worker_proxy"
+            })?;
+            let auth_token = std::env::var("WORKER_PROXY_AUTH_TOKEN").ok();
+            let store =
+                WorkerProxyStore::<Webcash, _>::new(worker_url, auth_token, WebcashLegacyKeys);
+            serve(Server::new(cfg, store)).await
+        }
         #[cfg(feature = "fdb")]
         "fdb" => {
             // Caller is responsible for foundationdb::boot() before this point.
@@ -118,7 +131,7 @@ async fn main() -> anyhow::Result<()> {
              rebuild with `cargo build --features fdb` (FoundationDB C client must be installed)"
         ),
         other => anyhow::bail!(
-            "unknown WEBCASH_DB_BACKEND: {other} (must be `redis`, `dynamodb`, `fdb`, or `redis_fdb`)"
+            "unknown WEBCASH_DB_BACKEND: {other} (must be `redis`, `dynamodb`, `worker_proxy`, `fdb`, or `redis_fdb`)"
         ),
     }
 }

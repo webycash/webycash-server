@@ -1,0 +1,46 @@
+name = "webycash-cf-container-rgb"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+account_id = "REPLACE_ME"
+
+[[d1_databases]]
+binding = "WEBYCASH_D1"
+database_name = "webycash-cf-container-rgb-testnet"
+database_id = "REPLACE_ME_AFTER_d1_create"
+migrations_dir = "../../migrations"
+
+[[containers]]
+class_name = "RgbContainer"
+image = "../../../../Dockerfile.cf-rgb"
+instance_type = "basic"
+max_instances = 4
+
+[durable_objects]
+bindings = [
+  { name = "WEBYCASH_CONTAINER", class_name = "RgbContainer" },
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RgbContainer"]
+
+[vars]
+WEBCASH_MODE = "testnet"
+# Issuer keys for /api/v1/issue: set via `wrangler secret put` in production.
+# WEBYCASH_ISSUERS = "fp:hex_pubkey,..."
+# WEBYCASH_ISSUER_PGP_CERTS = "-----BEGIN PGP PUBLIC KEY BLOCK-----..."
+
+[env.production.vars]
+WEBCASH_MODE = "production"
+
+[[env.production.d1_databases]]
+binding = "WEBYCASH_D1"
+database_name = "webycash-cf-container-rgb-production"
+database_id = "REPLACE_ME_AFTER_d1_create"
+migrations_dir = "../../migrations"
+
+[[env.production.containers]]
+class_name = "RgbContainer"
+image = "../../../../Dockerfile.cf-rgb"
+instance_type = "standard"
+max_instances = 16

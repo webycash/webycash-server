@@ -1,0 +1,43 @@
+name = "webycash-cf-container-webcash"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+account_id = "REPLACE_ME"
+
+[[d1_databases]]
+binding = "WEBYCASH_D1"
+database_name = "webycash-cf-container-webcash-testnet"
+database_id = "REPLACE_ME_AFTER_d1_create"
+migrations_dir = "../../migrations"
+
+[[containers]]
+class_name = "WebycashContainer"
+image = "../../../../Dockerfile.cf-webcash"
+instance_type = "basic"
+max_instances = 4
+
+[durable_objects]
+bindings = [
+  { name = "WEBYCASH_CONTAINER", class_name = "WebycashContainer" },
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["WebycashContainer"]
+
+[vars]
+WEBCASH_MODE = "testnet"
+
+[env.production.vars]
+WEBCASH_MODE = "production"
+
+[[env.production.d1_databases]]
+binding = "WEBYCASH_D1"
+database_name = "webycash-cf-container-webcash-production"
+database_id = "REPLACE_ME_AFTER_d1_create"
+migrations_dir = "../../migrations"
+
+[[env.production.containers]]
+class_name = "WebycashContainer"
+image = "../../../../Dockerfile.cf-webcash"
+instance_type = "standard"
+max_instances = 16

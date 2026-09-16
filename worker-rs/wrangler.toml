@@ -1,0 +1,24 @@
+name = "webycash-webcash-dev"
+main = "build/worker/shim.mjs"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[build]
+command = "worker-build --release"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "webycash-cf-webcash-dev"
+database_id = "fd2f2a5e-704c-4931-944a-96d0549438f9"
+# Schema (tokens/mining_state/audit_log + double-spend triggers) is asset-generic
+# and shared by all rail flavors. Apply with `wrangler d1 migrations apply
+# webycash-cf-webcash-dev --remote` — a fresh D1 404s until this runs.
+migrations_dir = "../deploy/cloudflare-container/migrations"
+
+[vars]
+API_PREFIX = "/api/webcash"
+
+[[routes]]
+pattern = "dev.weby.cash/api/webcash/*"
+zone_name = "weby.cash"
