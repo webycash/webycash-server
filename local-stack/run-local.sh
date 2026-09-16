@@ -173,7 +173,9 @@ pk=str(i.get("signerPubkey","")).lower()
 if pk.startswith("0x"): pk=pk[2:]
 if len(pk)==66 and pk[:2] in ("02","03"): pk=pk[2:]
 delay=i.get("unilateralExitDelay",5)
-print(f"{pk} {delay}")
+digest=str(i.get("digest","")).lower()
+if digest.startswith("0x"): digest=digest[2:]
+print(f"{pk} {delay} {digest}")
 PY
 )
     PARSED_RC=$?
@@ -181,6 +183,8 @@ PY
     if [[ $PARSED_RC -eq 0 && -n "$PARSED" ]]; then
       ARK_SIGNER=$(echo "$PARSED" | awk '{print $1}')
       ARK_DELAY=$(echo "$PARSED" | awk '{print $2}')
+      DIG=$(echo "$PARSED" | awk '{print $3}')
+      [[ -n "$DIG" ]] && ARK_DIGEST="$DIG"
     fi
   fi
 
