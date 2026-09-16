@@ -55,6 +55,17 @@ ensure_dev_keys() {
     printf '%s' "2222222222222222222222222222222222222222222222222222222222222222" > "$RUNDIR/musig2_secret.hex"
     chmod 600 "$RUNDIR/musig2_secret.hex"
   fi
+  # Distinct XChaCha20 wrap key for sealed live MuSig2 nonce seeds (never reuse
+  # the signing secret). Host-volume durable fence requires this file.
+  if [[ ! -f "$RUNDIR/musig2_wrap.hex" ]]; then
+    printf '%s' "5555555555555555555555555555555555555555555555555555555555555555" > "$RUNDIR/musig2_wrap.hex"
+    chmod 600 "$RUNDIR/musig2_wrap.hex"
+  fi
+  # Persistent Ed25519 audit/push identity (hex seed) so restarts keep the same vk.
+  if [[ ! -f "$RUNDIR/identity_secret.hex" ]]; then
+    printf '%s' "7777777777777777777777777777777777777777777777777777777777777777" > "$RUNDIR/identity_secret.hex"
+    chmod 600 "$RUNDIR/identity_secret.hex"
+  fi
 }
 
 require_bin() {
@@ -81,7 +92,10 @@ launch() {  # name, logfile, binary, [env KEY=VAL ...]
   local name="$1"; shift
   local log="$1"; shift
   local bin="$1"; shift
-  ( env "$@" "$bin" >"$log" 2>&1 & echo $! > "$RUNDIR/$name.pid" )
+  # nohup + disown so agent/shell exit does not SIGHUP the stack
+  nohup env "$@" "$bin" >"$log" 2>&1 &
+  echo $! > "$RUNDIR/$name.pid"
+  disown "$(cat "$RUNDIR/$name.pid")" 2>/dev/null || true
   echo "  launched $name (pid $(cat "$RUNDIR/$name.pid"), log $log)"
 }
 
@@ -138,26 +152,64 @@ up() {
     EXTRO_OPERATOR_DOMAIN=keyserver.local RUST_LOG=info
   wait_http "http://127.0.0.1:7800/api/v1/health" keyserver
 
-  echo "[4/4] webycash-referee (SQLite = D1, real HttpBearerRail → webcash :8181)…"
-  # WEBYCASH_REFEREE_DB_PATH points at a local SQLite file: D1 IS SQLite, so
-  # this is the exact store/audit code path that runs on Cloudflare D1.
-  # EXTRO_ZKP_VK_PATH points at the extro-circuits dev verifying key. NOTE: the
-  # arkworks verifier ALREADY defaults to this same dev VK when the env var is
-  # unset (ArkworksVerifier::from_env_bearer → default_vk_path =
-  # extro-circuits/circuits-dev/vk_bearer_payload.bin), so the referee boots
-  # with a REAL arkworks Groth16/BN254 verifier here (not fail-closed). It only
-  # fails closed if neither the env path nor the dev VK file is readable. The
-  # smoke test does not exercise swap-initiate, so the VK is not load-bearing
-  # for Phase D — but it IS for Phase E, and is wired explicitly for clarity.
+  echo "[4/4] webycash-referee (host-volume SQLite + durable MuSig2 → webcash :8181)…"
+  # Host-backed SQLite under .run/ is the local/dev rollback fence
+  # (storage_fence=host-volume-dev). Distinct from CF container ephemeral /data.
+  # All three MuSig2 custody paths are required for RealSigner::load_durable.
   local DEV_VK="$WORKSPACE/extro/extro-circuits/circuits-dev/vk_bearer_payload.bin"
+  # Arkade-regtest pins from live /v1/info (fallback = GATE3 evidence pins).
+  local ARK_SIGNER="e35799157be4b37565bb5afe4d04e6a0fa0a4b6a4f4e48b0d904685d253cdbdb"
+  local ARK_DIGEST="ff60fc5daff9965857bd2b906833342a3f53866c03b645a170829720078e7fbd"
+  local ARK_DELAY="5"
+  if curl -fsS http://127.0.0.1:7070/v1/info >/tmp/ark-info.json 2>/dev/null; then
+    set +e
+    PARSED=$(python3 - <<'PY'
+import json
+try:
+    i=json.load(open("/tmp/ark-info.json", encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+pk=str(i.get("signerPubkey","")).lower()
+if pk.startswith("0x"): pk=pk[2:]
+if len(pk)==66 and pk[:2] in ("02","03"): pk=pk[2:]
+delay=i.get("unilateralExitDelay",5)
+print(f"{pk} {delay}")
+PY
+)
+    PARSED_RC=$?
+    set -e
+    if [[ $PARSED_RC -eq 0 && -n "$PARSED" ]]; then
+      ARK_SIGNER=$(echo "$PARSED" | awk '{print $1}')
+      ARK_DELAY=$(echo "$PARSED" | awk '{print $2}')
+    fi
+  fi
+
+  # Operator VK for F1 = ed25519 vk of EXTRO_OPERATOR_DEV_KEY=0x11*32 (dev only).
+  local KS_VK="d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+
   launch referee "$RUNDIR/referee.log" "$REFEREE_BIN" \
     WEBYCASH_REFEREE_BIND=127.0.0.1:8090 \
+    WEBYCASH_REFEREE_IDENTITY_KEY_PATH="$RUNDIR/identity_secret.hex" \
     WEBYCASH_REFEREE_DB_PATH="$RUNDIR/referee.sqlite" \
-    WEBYCASH_REFEREE_RAIL_BASE_URL=http://127.0.0.1:8181 \
     WEBYCASH_REFEREE_MUSIG2_KEY_PATH="$RUNDIR/musig2_secret.hex" \
+    WEBYCASH_REFEREE_MUSIG2_SESSION_DB_PATH="$RUNDIR/musig2-sessions.sqlite" \
+    WEBYCASH_REFEREE_MUSIG2_WRAP_KEY_PATH="$RUNDIR/musig2_wrap.hex" \
+    WEBYCASH_REFEREE_RAIL_BASE_URL=http://127.0.0.1:8181 \
+    WEBYCASH_REFEREE_KEYSERVER_BASE_URL=http://127.0.0.1:7800 \
+    WEBYCASH_REFEREE_STORAGE_FENCE=host-volume-dev \
+    WEBYCASH_REFEREE_STORAGE_CLASS=host-volume-dev \
+    WEBYCASH_REFEREE_EDGE_RELEASE=gate3-durable-host-fence-v1 \
+    WEBYCASH_REFEREE_STORAGE_PATHS="$RUNDIR/referee.sqlite,$RUNDIR/musig2-sessions.sqlite" \
+    ARK_ASP_URL=http://127.0.0.1:7070 \
+    ARK_NETWORK=regtest \
+    ARK_SIGNER_PK_HEX="$ARK_SIGNER" \
+    ARK_INFO_DIGEST_HEX="$ARK_DIGEST" \
+    ARK_UNILATERAL_EXIT_DELAY="$ARK_DELAY" \
     EXTRO_ZKP_VK_PATH="$DEV_VK" \
-    RUST_LOG=info
+    RUST_LOG=info \
+    ${KS_VK:+WEBYCASH_REFEREE_KEYSERVER_VK="$KS_VK"}
   wait_http "http://127.0.0.1:8090/v1/health" referee
+  echo "  referee /v1/release: $(curl -fsS http://127.0.0.1:8090/v1/release 2>/dev/null || echo missing)"
 
   echo
   echo "stack up. endpoints:"
@@ -165,7 +217,8 @@ up() {
   echo "  rgb       http://127.0.0.1:8182/api/v1/target   (if built)"
   echo "  voucher   http://127.0.0.1:8183/api/v1/target   (if built)"
   echo "  keyserver http://127.0.0.1:7800/api/v1/health  + /.well-known/extro-keyserver"
-  echo "  referee   http://127.0.0.1:8090/v1/health      + /v1/pubkey"
+  echo "  referee   http://127.0.0.1:8090/v1/health + /v1/pubkey + /v1/release"
+  echo "  storage_fence=host-volume-dev (local .run SQLite; NOT CF ephemeral)"
   echo
   echo "smoke test:  $HERE/smoke-test.sh"
   echo "tear down:   $HERE/run-local.sh down"
