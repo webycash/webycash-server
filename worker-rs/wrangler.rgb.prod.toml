@@ -1,0 +1,26 @@
+# PRODUCTION rgb rail (Cloudflare Worker + native D1; no container, no /__d1 proxy).
+# Real-value ledger: WEBCASH_MODE=production, mining disabled (mining is
+# development-only), /api/v1/issue closed until an issuer registry with a
+# durable nonce store is provisioned. ServeConfig::from_vars rejects any
+# testnet-only override (WEBYCASH_DIFFICULTY) on this profile.
+#   wrangler d1 migrations apply webycash-cf-rgb-prod --remote --config wrangler.rgb.prod.toml
+#   wrangler deploy --config wrangler.rgb.prod.toml
+name = "webycash-rgb-prod"
+main = "build/worker/shim.mjs"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[build]
+command = "worker-build --release -- --no-default-features --features rgb"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "webycash-cf-rgb-prod"
+database_id = "e3b7360e-113a-45ba-85d7-48e695a8614f"
+migrations_dir = "../deploy/cloudflare-container/migrations"
+
+[vars]
+API_PREFIX = ""
+WEBCASH_MODE = "production"
+WEBYCASH_MINING_MODE = "disabled"

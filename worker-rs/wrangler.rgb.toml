@@ -14,6 +14,9 @@ database_id = "a5a06134-7282-4839-88aa-a99dbce25a1d"
 
 [vars]
 API_PREFIX = "/api/rgb"
+# Testnet ledger; keeps the historic dev difficulty (ServeConfig::from_vars).
+WEBCASH_MODE = "testnet"
+WEBYCASH_DIFFICULTY = "16"
 
 [[routes]]
 pattern = "dev.weby.cash/api/rgb/*"

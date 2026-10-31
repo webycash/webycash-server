@@ -8,14 +8,10 @@
 //! Wire format stays bit-for-bit compatible with `https://webcash.org`
 //! production — `webycash-conformance` gates every change.
 
-use std::net::SocketAddr;
-use std::str::FromStr;
-
 use anyhow::Context;
 use tracing_subscriber::EnvFilter;
 use webycash_server::asset_webcash::Webcash;
-use webycash_server::mining::{MiningConfig, MiningMode};
-use webycash_server::server_core::{serve, ServeConfig, Server};
+use webycash_server::server_core::{serve, MiningDefaults, ServeConfig, Server};
 use webycash_server::storage::dynamodb_backend::DynamoDbStore;
 #[cfg(feature = "fdb")]
 use webycash_server::storage::fdb_backend::FdbStore;
@@ -34,31 +30,14 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let bind = std::env::var("WEBCASH_BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
-    let mode = std::env::var("WEBCASH_MODE").unwrap_or_else(|_| "testnet".to_string());
+    let (mode, cfg) = ServeConfig::from_vars(MiningDefaults::webcash(), |k| std::env::var(k).ok())?;
+    let bind = cfg.bind_addr;
     let db_backend = std::env::var("WEBCASH_DB_BACKEND").unwrap_or_else(|_| "redis".to_string());
-
-    let mut mining = MiningConfig {
-        mode: match mode.as_str() {
-            "production" => MiningMode::webcash_production(),
-            _ => MiningMode::webcash_testnet(),
-        },
-        ..MiningConfig::default()
-    };
-    if let Ok(d) = std::env::var("WEBYCASH_DIFFICULTY") {
-        if let Ok(bits) = d.parse::<u32>() {
-            mining.mode = MiningMode::Fixed { difficulty: bits };
-        }
-    }
-
-    let bind_addr = SocketAddr::from_str(&bind)
-        .with_context(|| format!("WEBCASH_BIND_ADDR is not a valid socket address: {bind}"))?;
-    let cfg = ServeConfig { bind_addr, mining };
 
     tracing::info!(
         asset = "webcash",
         %bind,
-        %mode,
+        ?mode,
         backend = %db_backend,
         "server-webcash booting"
     );
