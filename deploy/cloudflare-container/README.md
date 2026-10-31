@@ -2,25 +2,28 @@
 
 The "Lambda-equivalent" deployment path: the **existing native hyper
 binary** runs inside a Cloudflare Container, fronted by a thin Worker
-that handles edge routing and exposes a `/__d1/batch` endpoint the
-Container calls back to for D1 storage operations.
+that forwards public traffic to it and serves D1 to the Container through a
+container-only outbound bridge (`workers/shared/d1-bridge.ts`). The public
+Worker origin has no database route.
 
 ```
        Internet                  Cloudflare edge
-  client ──────► Worker (TS)                       Container (Linux Docker)
-                  │                                  ┌──────────────────────┐
-                  ├── /__d1/batch ◄──── HTTP ──────  │ webycash-server-X    │
-                  │      │                           │   (hyper + tokio)    │
-                  │      └─► D1 (SQLite)             │   WorkerProxyStore   │
-                  │                                  └──────────────────────┘
-                  └── /*  ─────► Container.fetch(req)
+  client ──────► Worker (TS) ── /* ──► Container.fetch(req)
+                  (no DB route)                     ┌──────────────────────┐
+                                                    │ webycash-server-X    │
+   container-only outbound                          │   (hyper + tokio)    │
+   http://d1.webycash.internal/__d1/batch ◄──────── │   WorkerProxyStore   │
+     (outboundByHost, Bearer token) ─► D1 (SQLite)  └──────────────────────┘
 ```
 
 The Container is a normal Linux x86_64 environment with full hyper,
 tokio, and any other Rust dependency — same binary that runs on bare
 metal, AWS Lambda, or any traditional VM. The single piece of
-Cloudflare-native plumbing is the Worker's `/__d1/batch` endpoint, which
-lets the Container reach D1 (whose binding is Worker-only) without
+Cloudflare-native plumbing is the D1 bridge: `@cloudflare/containers`
+`outboundByHost` intercepts the Container's requests to the virtual origin
+`http://d1.webycash.internal` and serves `/__d1/batch` inside the Workers
+runtime (Bearer `WORKER_PROXY_AUTH_TOKEN`, a Worker secret of >= 32 chars;
+both sides fail closed without it). This lets the Container reach D1 (whose binding is Worker-only) without
 giving up D1 as the backing store.
 
 ## Layout
@@ -89,13 +92,17 @@ minutes); subsequent runs hit the Docker layer cache and come up in
 
 The Worker listens on `http://127.0.0.1:8787`. Requests to `/api/v1/*`
 are forwarded to the Container. The Container's `WorkerProxyStore`
-calls `http://host.docker.internal:8787/__d1/batch` for every storage
-operation, where Cloudflare's local miniflare serves the D1 binding.
+calls `http://d1.webycash.internal/__d1/batch` for every storage
+operation; the Worker's outbound handler serves it from the local D1 binding.
+Put `WORKER_PROXY_AUTH_TOKEN=<random 32+ chars>` in `.dev.vars`.
 
 ## Deployment
 
 ```sh
 cd deploy/cloudflare-container/workers/{flavor}
+
+# once per environment: the Container <-> Worker D1 bridge token
+openssl rand -hex 32 | wrangler secret put WORKER_PROXY_AUTH_TOKEN
 
 # testnet
 wrangler deploy
@@ -135,7 +142,8 @@ The Worker forwards both env vars to the Container at start time
 
 ## Wire protocol between Container and Worker
 
-`POST /__d1/batch` with body:
+`POST http://d1.webycash.internal/__d1/batch` (container-only) with
+`Authorization: Bearer $WORKER_PROXY_AUTH_TOKEN` and body:
 
 ```json
 {

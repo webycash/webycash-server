@@ -91,12 +91,7 @@ async fn main() -> anyhow::Result<()> {
             // Cloudflare Containers path: this binary runs inside a
             // Docker container; D1 is reached via the thin Worker that
             // hosts the binding at $WORKER_PROXY_URL.
-            let worker_url = std::env::var("WORKER_PROXY_URL").with_context(|| {
-                "WORKER_PROXY_URL must be set when WEBCASH_DB_BACKEND=worker_proxy"
-            })?;
-            let auth_token = std::env::var("WORKER_PROXY_AUTH_TOKEN").ok();
-            let store =
-                WorkerProxyStore::<Webcash, _>::new(worker_url, auth_token, WebcashLegacyKeys);
+            let store = WorkerProxyStore::<Webcash, _>::from_env(WebcashLegacyKeys)?;
             serve(Server::new(cfg, store)).await
         }
         #[cfg(feature = "fdb")]

@@ -290,18 +290,20 @@ Cloudflare deployment path (the Lambda-equivalent: a native Linux Docker
 container on Cloudflare's network). The existing native hyper binary
 runs inside a Cloudflare Container with `WEBCASH_DB_BACKEND=worker_proxy`;
 a thin TS edge Worker fronts the Container and holds the D1 binding.
-The Container reaches D1 by HTTP-calling the Worker's `/__d1/batch`
-endpoint.
+The Container reaches D1 through a container-only outbound bridge: the
+Worker registers the virtual origin `http://d1.webycash.internal` with
+`outboundByHost` and serves `/__d1/batch` there (Bearer
+`WORKER_PROXY_AUTH_TOKEN`, required). The public Worker origin has no
+database route.
 
 ```
-        Internet                Cloudflare edge
-   client ──────► Worker (TS)                       Container (Linux)
-                   │                                  ┌──────────────────────┐
-                   ├── /__d1/batch ◄──── HTTP ──────  │ webycash-server-X    │
-                   │     │                            │  (hyper + tokio)     │
-                   │     └─► D1 (SQLite)              │  WorkerProxyStore    │
-                   │                                  └──────────────────────┘
-                   └── /*  ─────► Container.fetch(req)
+       Internet                  Cloudflare edge
+  client ──────► Worker (TS) ── /* ──► Container.fetch(req)
+                  (no DB route)                     ┌──────────────────────┐
+                                                    │ webycash-server-X    │
+   container-only outbound                          │   (hyper + tokio)    │
+   http://d1.webycash.internal/__d1/batch ◄──────── │   WorkerProxyStore   │
+     (outboundByHost, Bearer token) ─► D1 (SQLite)  └──────────────────────┘
 ```
 
 Per-flavor wrangler configs:

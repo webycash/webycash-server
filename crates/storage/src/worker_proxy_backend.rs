@@ -14,9 +14,14 @@
 //! `assert_token_exists`) carry double-spend and missing-input
 //! enforcement inside `db.batch(...)`.
 //!
-//! Auth: optional `Authorization: Bearer <token>` header for the
-//! Container ↔ Worker hop. The Worker should reject unauthenticated
-//! `/__d1/*` calls in production deployments — the binding is internal.
+//! Transport: on Cloudflare the Worker serves the batch endpoint only on the
+//! container-only virtual origin `http://d1.webycash.internal`
+//! (`outboundByHost`, see `deploy/cloudflare-container/workers/shared`); the
+//! public Worker origin has no database route.
+//!
+//! Auth: `Authorization: Bearer <token>` on every batch. The token
+//! (`WORKER_PROXY_AUTH_TOKEN`, >= [`MIN_AUTH_TOKEN_LEN`] chars) is mandatory —
+//! [`WorkerProxyStore::from_env`] fails closed without it.
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -33,44 +38,67 @@ use crate::storage::{
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+/// Minimum length of the Container ↔ Worker bearer token.
+pub const MIN_AUTH_TOKEN_LEN: usize = 32;
+
 /// Native `LedgerStore<A>` implementation that proxies all D1 ops to a
 /// Cloudflare Worker over HTTP.
 pub struct WorkerProxyStore<A: Asset, K: KeyStrategy> {
     client: reqwest::Client,
     worker_url: String,
-    auth_token: Option<String>,
+    auth_token: String,
     keys: K,
     _ph: PhantomData<A>,
 }
 
 impl<A: Asset, K: KeyStrategy> WorkerProxyStore<A, K> {
-    /// Build a new proxy store.
-    ///
-    /// `worker_url` is the base URL of the Worker (e.g.
-    /// `https://webycash-webcash.example.workers.dev` or, in `wrangler
-    /// dev` local mode, `http://127.0.0.1:8787`). The store POSTs to
-    /// `{worker_url}/__d1/batch`.
-    pub fn new(worker_url: String, auth_token: Option<String>, keys: K) -> Self {
-        Self {
+    /// Build a proxy store from the container environment: `WORKER_PROXY_URL`
+    /// (the D1 bridge origin) and `WORKER_PROXY_AUTH_TOKEN` (required).
+    pub fn from_env(keys: K) -> anyhow::Result<Self> {
+        Self::from_vars(
+            std::env::var("WORKER_PROXY_URL").ok(),
+            std::env::var("WORKER_PROXY_AUTH_TOKEN").ok(),
+            keys,
+        )
+    }
+
+    fn from_vars(url: Option<String>, token: Option<String>, keys: K) -> anyhow::Result<Self> {
+        let url = url
+            .filter(|u| !u.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("WORKER_PROXY_URL must be set when WEBCASH_DB_BACKEND=worker_proxy"))?;
+        let token = token.unwrap_or_default();
+        Self::new(url, token, keys)
+    }
+
+    /// Build a new proxy store. The store POSTs to `{worker_url}/__d1/batch`
+    /// with `Authorization: Bearer {auth_token}`; a token shorter than
+    /// [`MIN_AUTH_TOKEN_LEN`] is refused (the D1 binding must never be
+    /// reachable unauthenticated).
+    pub fn new(worker_url: String, auth_token: String, keys: K) -> anyhow::Result<Self> {
+        if auth_token.len() < MIN_AUTH_TOKEN_LEN {
+            anyhow::bail!(
+                "WORKER_PROXY_AUTH_TOKEN must be set (>= {MIN_AUTH_TOKEN_LEN} chars) when WEBCASH_DB_BACKEND=worker_proxy"
+            );
+        }
+        Ok(Self {
             client: reqwest::Client::builder()
                 .pool_idle_timeout(std::time::Duration::from_secs(30))
                 .build()
-                .expect("reqwest client"),
+                .map_err(|e| anyhow::anyhow!("reqwest client: {e}"))?,
             worker_url: worker_url.trim_end_matches('/').to_string(),
             auth_token,
             keys,
             _ph: PhantomData,
-        }
+        })
     }
 
     async fn batch(&self, stmts: Vec<BatchStmt>) -> anyhow::Result<Vec<BatchResult>> {
         let url = format!("{}/__d1/batch", self.worker_url);
-        let req = self.client.post(&url).json(&BatchRequest { statements: stmts });
-        let req = if let Some(t) = &self.auth_token {
-            req.header("Authorization", format!("Bearer {t}"))
-        } else {
-            req
-        };
+        let req = self
+            .client
+            .post(&url)
+            .bearer_auth(&self.auth_token)
+            .json(&BatchRequest { statements: stmts });
         let resp = req
             .send()
             .await
@@ -474,6 +502,31 @@ mod tests {
     /// contract on top of an in-memory `rusqlite::Connection`. Returns
     /// the bound base URL ("http://127.0.0.1:<port>") and the shared
     /// connection so individual tests can pre-seed state if they want.
+    const TEST_TOKEN: &str = "test-bridge-token-0123456789abcdef0123";
+
+    #[test]
+    fn worker_proxy_requires_url_and_strong_token() {
+        type S = WorkerProxyStore<Webcash, WebcashLegacyKeys>;
+        let url = || Some("http://d1.webycash.internal".to_string());
+        assert!(S::from_vars(None, Some(TEST_TOKEN.into()), WebcashLegacyKeys).is_err());
+        let e = S::from_vars(url(), None, WebcashLegacyKeys).err().expect("no token refused");
+        assert!(e.to_string().contains("WORKER_PROXY_AUTH_TOKEN"));
+        assert!(S::from_vars(url(), Some("short".into()), WebcashLegacyKeys).is_err());
+        assert!(S::from_vars(url(), Some(TEST_TOKEN.into()), WebcashLegacyKeys).is_ok());
+    }
+
+    #[tokio::test]
+    async fn wrong_token_is_rejected_by_bridge() {
+        let (url, _conn) = spawn_worker().await;
+        let store = WorkerProxyStore::<Webcash, WebcashLegacyKeys>::new(
+            url,
+            "x".repeat(MIN_AUTH_TOKEN_LEN),
+            WebcashLegacyKeys,
+        )
+        .unwrap();
+        assert!(store.insert_tokens(&[record(A)]).await.is_err());
+    }
+
     async fn spawn_worker() -> (String, Arc<Mutex<Connection>>) {
         let conn = Connection::open_in_memory().expect("open in-memory sqlite");
         conn.execute_batch(SCHEMA).expect("apply schema");
@@ -512,6 +565,14 @@ mod tests {
             return Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(Full::new(Bytes::from_static(b"{}")))
+                .unwrap();
+        }
+        // Mirror the Worker bridge: every batch must carry the bearer token.
+        let expected = format!("Bearer {TEST_TOKEN}");
+        if req.headers().get("authorization").and_then(|v| v.to_str().ok()) != Some(&expected) {
+            return Response::builder()
+                .status(StatusCode::UNAUTHORIZED)
+                .body(Full::new(Bytes::from_static(br#"{"ok":false,"error":"unauthorized"}"#)))
                 .unwrap();
         }
         let body = match req.into_body().collect().await {
@@ -705,9 +766,10 @@ mod tests {
         let (url, _conn) = spawn_worker().await;
         let store = WorkerProxyStore::<Webcash, WebcashLegacyKeys>::new(
             url,
-            None,
+            TEST_TOKEN.to_string(),
             WebcashLegacyKeys,
-        );
+        )
+        .unwrap();
         let r = record(A);
         store
             .insert_tokens(std::slice::from_ref(&r))
@@ -728,9 +790,10 @@ mod tests {
         let (url, _conn) = spawn_worker().await;
         let store = WorkerProxyStore::<Webcash, WebcashLegacyKeys>::new(
             url,
-            None,
+            TEST_TOKEN.to_string(),
             WebcashLegacyKeys,
-        );
+        )
+        .unwrap();
         store.insert_tokens(&[record(A)]).await.unwrap();
         let ha = public_hash(A);
         // First replace consumes A → produces B.
@@ -768,9 +831,10 @@ mod tests {
         let (url, _conn) = spawn_worker().await;
         let store = WorkerProxyStore::<Webcash, WebcashLegacyKeys>::new(
             url,
-            None,
+            TEST_TOKEN.to_string(),
             WebcashLegacyKeys,
-        );
+        )
+        .unwrap();
         // A is never inserted — the assert_token_exists view trigger
         // must fire and abort the batch.
         let results = store
@@ -797,9 +861,10 @@ mod tests {
         let (url, _conn) = spawn_worker().await;
         let store = WorkerProxyStore::<Webcash, WebcashLegacyKeys>::new(
             url,
-            None,
+            TEST_TOKEN.to_string(),
             WebcashLegacyKeys,
-        );
+        )
+        .unwrap();
         store.insert_tokens(&[record(A)]).await.unwrap();
         let h = public_hash(A);
         let burn = BurnRecord {
@@ -824,9 +889,10 @@ mod tests {
         let (url, _conn) = spawn_worker().await;
         let store = WorkerProxyStore::<Webcash, WebcashLegacyKeys>::new(
             url,
-            None,
+            TEST_TOKEN.to_string(),
             WebcashLegacyKeys,
-        );
+        )
+        .unwrap();
         assert!(store.get_mining_state().await.unwrap().is_none());
         let state = MiningState {
             total_circulation_wats: 12345,

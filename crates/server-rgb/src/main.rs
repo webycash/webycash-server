@@ -120,12 +120,7 @@ async fn main() -> anyhow::Result<()> {
             finish!(store)
         }
         "worker_proxy" => {
-            let worker_url = std::env::var("WORKER_PROXY_URL").with_context(|| {
-                "WORKER_PROXY_URL must be set when WEBCASH_DB_BACKEND=worker_proxy"
-            })?;
-            let auth_token = std::env::var("WORKER_PROXY_AUTH_TOKEN").ok();
-            let store =
-                WorkerProxyStore::<RgbFungible, _>::new(worker_url, auth_token, NamespacedKeys);
+            let store = WorkerProxyStore::<RgbFungible, _>::from_env(NamespacedKeys)?;
             finish!(store)
         }
         #[cfg(feature = "fdb")]

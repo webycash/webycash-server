@@ -182,7 +182,7 @@ redis-fdb = ["redis", "fdb"]
 # Cloudflare Containers + D1 backend. The native server binary runs inside
 # a Cloudflare Container and reaches D1 by HTTP-calling a thin TS Worker
 # that holds the D1 binding. Wire format defined in
-# `deploy/cloudflare-container/workers/{flavor}/src/index.ts`.
+# `deploy/cloudflare-container/workers/shared/d1-bridge.ts`.
 worker-proxy = ["dep:reqwest"]
 
 [dependencies]

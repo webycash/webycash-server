@@ -1,0 +1,8 @@
+{
+  "name": "webycash-cf-container-shared",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --test d1-bridge.test.ts"
+  }
+}

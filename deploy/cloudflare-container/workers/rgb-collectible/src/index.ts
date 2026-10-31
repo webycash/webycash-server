@@ -1,12 +1,26 @@
 /// <reference types="@cloudflare/workers-types" />
-// Edge Worker for the RGB21 collectible flavor. Same /__d1/batch contract
-// as the other flavors. See workers/webcash/src/index.ts for inline docs.
+//
+// Edge Worker for the RGB21 collectible flavor of webycash-server.
+//
+// Public surface: every request is forwarded to the Container's hyper server
+// (the webycash-server binary with WEBCASH_DB_BACKEND=worker_proxy). There is
+// no database route on the public origin.
+//
+// D1: the binary reaches D1 only through the container-only bridge
+// (`../../shared/d1-bridge.ts`), registered below with `outboundByHost` on the
+// virtual origin `http://d1.webycash.internal`. Requires the Worker secret
+// `WORKER_PROXY_AUTH_TOKEN` (>= 32 chars); without it the bridge fails closed.
 
-import { Container } from "@cloudflare/containers";
+import { Container, ContainerProxy, type OutboundHandlerContext } from "@cloudflare/containers";
+import { D1_BRIDGE_HOST, D1_BRIDGE_ORIGIN, handleD1Bridge } from "../../shared/d1-bridge.ts";
+
+// Required by @cloudflare/containers for outbound interception.
+export { ContainerProxy };
 
 interface Env {
   WEBYCASH_D1: D1Database;
   WEBYCASH_CONTAINER: DurableObjectNamespace<RgbCollectibleContainer>;
+  WORKER_PROXY_AUTH_TOKEN?: string;
   WEBYCASH_ISSUERS?: string;
   WEBYCASH_ISSUER_PGP_CERTS?: string;
 }
@@ -19,72 +33,27 @@ export class RgbCollectibleContainer extends Container<Env> {
   constructor(ctx: DurableObjectState<{}>, env: Env) {
     super(ctx, env);
     this.envVars = {
-      WORKER_PROXY_URL: "http://host.docker.internal:8787",
+      WORKER_PROXY_URL: D1_BRIDGE_ORIGIN,
+      WORKER_PROXY_AUTH_TOKEN: env.WORKER_PROXY_AUTH_TOKEN ?? "",
       WEBYCASH_ISSUERS: env.WEBYCASH_ISSUERS ?? "",
       WEBYCASH_ISSUER_PGP_CERTS: env.WEBYCASH_ISSUER_PGP_CERTS ?? "",
     };
   }
 }
 
-interface BatchStmt {
-  sql: string;
-  params: unknown[];
-}
-
-interface BatchRequest {
-  statements: BatchStmt[];
-}
+// Assigned, not declared as a `static` class field: an ES2022 static field
+// defines an own property that shadows the base-class static setter, so the
+// handler would never be registered and bridge calls would fall through to the
+// internet (this broke the referee container on 2026-10-31).
+RgbCollectibleContainer.outboundByHost = {
+  [D1_BRIDGE_HOST]: (request: Request, env: Env, _ctx: OutboundHandlerContext) =>
+    handleD1Bridge(request, env.WEBYCASH_D1, env.WORKER_PROXY_AUTH_TOKEN),
+};
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-
-    if (url.pathname === "/__d1/batch" && request.method === "POST") {
-      return handleD1Batch(request, env);
-    }
-
-    const id = env.WEBYCASH_CONTAINER.idFromName("primary");
-    const stub = env.WEBYCASH_CONTAINER.get(id);
+    // One DO per asset namespace keeps the Container instance warm.
+    const stub = env.WEBYCASH_CONTAINER.get(env.WEBYCASH_CONTAINER.idFromName("primary"));
     return stub.fetch(request);
   },
 };
-
-async function handleD1Batch(request: Request, env: Env): Promise<Response> {
-  let body: BatchRequest;
-  try {
-    body = (await request.json()) as BatchRequest;
-  } catch (e) {
-    return jsonResponse({ ok: false, error: `body parse: ${stringifyError(e)}` }, 400);
-  }
-  if (!Array.isArray(body.statements)) {
-    return jsonResponse({ ok: false, error: "statements must be an array" }, 400);
-  }
-
-  try {
-    const stmts = body.statements.map((s) =>
-      env.WEBYCASH_D1.prepare(s.sql).bind(...(s.params ?? [])),
-    );
-    const results = await env.WEBYCASH_D1.batch(stmts);
-    const wire = results.map((r) => ({ rows: r.results ?? [] }));
-    return jsonResponse({ ok: true, results: wire }, 200);
-  } catch (e) {
-    return jsonResponse({ ok: false, error: stringifyError(e) }, 400);
-  }
-}
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
-
-function stringifyError(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  if (typeof e === "string") return e;
-  try {
-    return JSON.stringify(e);
-  } catch {
-    return String(e);
-  }
-}
