@@ -984,10 +984,17 @@ mod handlers {
         // Parse all webcash + subsidy outputs as MINED records.
         let mut records: Vec<A::Record> =
             Vec::with_capacity(preimage.webcash.len() + preimage.subsidy.len());
+        // Webcash protocol: the `subsidy` outputs are a subset of `webcash`
+        // (wallets list the subsidy token in both arrays). Insert each token
+        // once, otherwise the duplicate PK makes the whole insert fail (500).
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         for token in preimage.webcash.iter().chain(preimage.subsidy.iter()) {
             match A::parse_secret(token) {
                 Ok(secret) => {
-                    records.push(A::record_from_secret(&secret, RecordOrigin::Mined));
+                    let record = A::record_from_secret(&secret, RecordOrigin::Mined);
+                    if seen.insert(record.public_hash().to_string()) {
+                        records.push(record);
+                    }
                 }
                 Err(e) => return server_error(&format!("invalid mined token: {e}")),
             }
