@@ -39,8 +39,6 @@ use http::StatusCode;
 // Workers) build, which drives the runtime-neutral `route_proto*` handlers
 // from the worker-rs crate instead.
 #[cfg(not(target_arch = "wasm32"))]
-use std::convert::Infallible;
-#[cfg(not(target_arch = "wasm32"))]
 use http_body_util::{BodyExt, Full};
 #[cfg(not(target_arch = "wasm32"))]
 use hyper::body::Incoming;
@@ -52,6 +50,8 @@ use hyper::{Request, Response};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 #[cfg(not(target_arch = "wasm32"))]
 use hyper_util::server::conn::auto::Builder;
+#[cfg(not(target_arch = "wasm32"))]
+use std::convert::Infallible;
 
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_BODY_BYTES: usize = 1024 * 1024; // 1 MB — matches legacy server
@@ -137,7 +137,112 @@ pub struct ServeConfig {
     pub mining: MiningConfig,
 }
 
+/// Which ledger a deployment serves. Selected by `WEBCASH_MODE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeploymentMode {
+    /// Throwaway ledger; mining tunables may be overridden.
+    Testnet,
+    /// Real-value ledger; configuration is fail-closed.
+    Production,
+}
+
+impl DeploymentMode {
+    /// Parse `testnet` / `production`. Anything else is an error, never a
+    /// silent fallback to testnet.
+    pub fn parse(raw: &str) -> anyhow::Result<Self> {
+        match raw {
+            "testnet" => Ok(Self::Testnet),
+            "production" => Ok(Self::Production),
+            other => anyhow::bail!("WEBCASH_MODE must be `testnet` or `production`, got `{other}`"),
+        }
+    }
+}
+
+/// A flavor's mining mode per [`DeploymentMode`].
+#[derive(Debug, Clone)]
+pub struct MiningDefaults {
+    /// Mining mode on testnet.
+    pub testnet: crate::mining::MiningMode,
+    /// Mining mode on production.
+    pub production: crate::mining::MiningMode,
+}
+
+impl MiningDefaults {
+    /// Webcash: trivially mineable testnet, dynamic-difficulty production.
+    pub fn webcash() -> Self {
+        use crate::mining::MiningMode;
+        Self {
+            testnet: MiningMode::webcash_testnet(),
+            production: MiningMode::webcash_production(),
+        }
+    }
+    /// Fungible issued flavors (Voucher, RGB20).
+    pub fn issued() -> Self {
+        use crate::mining::MiningMode;
+        Self {
+            testnet: MiningMode::Fixed { difficulty: 4 },
+            production: MiningMode::issued_default(),
+        }
+    }
+    /// RGB21 collectibles: issuance only, never mined.
+    pub fn collectible() -> Self {
+        use crate::mining::MiningMode;
+        Self {
+            testnet: MiningMode::Disabled,
+            production: MiningMode::Disabled,
+        }
+    }
+}
+
 impl ServeConfig {
+    /// Build the config from deployment variables. Shared by the native
+    /// binaries (process env) and the Cloudflare Worker (wrangler vars), so
+    /// every runtime applies the same rules:
+    ///
+    /// - `WEBCASH_MODE`: `testnet` (default) or `production`.
+    /// - `WEBYCASH_MINING_MODE`: `enabled` (default) or `disabled`.
+    /// - `WEBYCASH_DIFFICULTY`: fixed difficulty bits; testnet only.
+    /// - `WEBCASH_BIND_ADDR`: native listen address (default `0.0.0.0:8080`).
+    ///
+    /// Malformed values are errors. Production rejects the difficulty
+    /// override so a real-value ledger cannot be made trivially mineable.
+    pub fn from_vars(
+        defaults: MiningDefaults,
+        get: impl Fn(&str) -> Option<String>,
+    ) -> anyhow::Result<(DeploymentMode, Self)> {
+        use crate::mining::MiningMode;
+        let mode = DeploymentMode::parse(get("WEBCASH_MODE").as_deref().unwrap_or("testnet"))?;
+        let mut mining = MiningConfig {
+            mode: match mode {
+                DeploymentMode::Testnet => defaults.testnet,
+                DeploymentMode::Production => defaults.production,
+            },
+            ..MiningConfig::default()
+        };
+        if let Some(raw) = get("WEBYCASH_DIFFICULTY") {
+            anyhow::ensure!(
+                mode == DeploymentMode::Testnet,
+                "WEBYCASH_DIFFICULTY is testnet-only; unset it for production"
+            );
+            let difficulty: u32 = raw.parse().map_err(|_| {
+                anyhow::anyhow!("WEBYCASH_DIFFICULTY must be an integer, got `{raw}`")
+            })?;
+            mining.mode = MiningMode::Fixed { difficulty };
+        }
+        match get("WEBYCASH_MINING_MODE").as_deref() {
+            None | Some("enabled") => {}
+            Some("disabled") => mining.mode = MiningMode::Disabled,
+            Some(other) => {
+                anyhow::bail!("WEBYCASH_MINING_MODE must be `enabled` or `disabled`, got `{other}`")
+            }
+        }
+        let bind = get("WEBCASH_BIND_ADDR").unwrap_or_else(|| "0.0.0.0:8080".to_string());
+        let bind_addr = bind.parse().map_err(|_| {
+            anyhow::anyhow!("WEBCASH_BIND_ADDR is not a valid socket address: {bind}")
+        })?;
+        Ok((mode, ServeConfig { bind_addr, mining }))
+    }
+
     /// Bind to 0.0.0.0:8080 with the testnet mining defaults
     /// (`MiningMode::webcash_testnet()`). Convenient for local
     /// scripting / smoke tests.
@@ -298,10 +403,7 @@ where
 
 /// Runtime-neutral dispatch for issued asset flavors. The hyper boundary
 /// is `route_issued`; the Cloudflare Worker boundary calls this directly.
-pub async fn route_proto_issued<A, S>(
-    state: &Server<A, S>,
-    req: &ProtoRequest,
-) -> ProtoResponse
+pub async fn route_proto_issued<A, S>(state: &Server<A, S>, req: &ProtoRequest) -> ProtoResponse
 where
     A: Asset
         + MintableAsset
@@ -603,10 +705,7 @@ mod handlers {
     /// {"status": "success",
     ///  "results": {"e{amt}:public:{hash}": {"spent": null|true|false}}}
     /// ```
-    pub async fn health_check<A, S>(
-        state: &Server<A, S>,
-        req: &ProtoRequest,
-    ) -> ProtoResponse
+    pub async fn health_check<A, S>(state: &Server<A, S>, req: &ProtoRequest) -> ProtoResponse
     where
         A: Asset + SplittableAsset + RecordBuilder,
         A::Record: HashRecord,
@@ -749,10 +848,7 @@ mod handlers {
     /// ```
     /// Production response on success: `{"status": "success"}`.
     /// Conservation law enforced: sum of input amounts == sum of output amounts.
-    pub async fn replace<A, S>(
-        state: &Server<A, S>,
-        req: &ProtoRequest,
-    ) -> ProtoResponse
+    pub async fn replace<A, S>(state: &Server<A, S>, req: &ProtoRequest) -> ProtoResponse
     where
         A: Asset + SplittableAsset + RecordBuilder + crate::asset_core::ReplaceHook,
         A::Record: HashRecord,
@@ -926,10 +1022,7 @@ mod handlers {
     /// ```
     /// Server verifies SHA256(preimage_bytes) has >= difficulty leading zeros,
     /// inserts the webcash + subsidy outputs as Mined records.
-    pub async fn mining_report<A, S>(
-        state: &Server<A, S>,
-        req: &ProtoRequest,
-    ) -> ProtoResponse
+    pub async fn mining_report<A, S>(state: &Server<A, S>, req: &ProtoRequest) -> ProtoResponse
     where
         A: Asset + MintableAsset + SplittableAsset + RecordBuilder,
         A::Record: HashRecord,
@@ -1355,10 +1448,7 @@ mod handlers {
     }
 
     /// `POST /api/v1/burn` — non-splittable variant.
-    pub async fn burn_collectible<A, S>(
-        state: &Server<A, S>,
-        req: &ProtoRequest,
-    ) -> ProtoResponse
+    pub async fn burn_collectible<A, S>(state: &Server<A, S>, req: &ProtoRequest) -> ProtoResponse
     where
         A: Asset + TransferableAsset + CollectibleRecordBuilder,
         S: LedgerStore<A>,
@@ -1401,10 +1491,7 @@ mod handlers {
     /// `POST /api/v1/issue` — collectible variant. Operator-signed mint.
     /// Same envelope as the splittable issue but uses
     /// `CollectibleRecordBuilder` to build records.
-    pub async fn issue_collectible<A, S>(
-        state: &Server<A, S>,
-        req: &ProtoRequest,
-    ) -> ProtoResponse
+    pub async fn issue_collectible<A, S>(state: &Server<A, S>, req: &ProtoRequest) -> ProtoResponse
     where
         A: Asset + TransferableAsset + CollectibleRecordBuilder + IssuedAsset,
         A::Record: HashRecord,
@@ -1615,5 +1702,64 @@ mod tests {
             ),
             "e1.5:public:0000000000000000000000000000000000000000000000000000000000000000"
         );
+    }
+}
+
+#[cfg(test)]
+mod serve_config_tests {
+    use super::*;
+    use crate::mining::MiningMode;
+    use std::collections::HashMap;
+
+    fn cfg(
+        vars: &[(&str, &str)],
+        d: MiningDefaults,
+    ) -> anyhow::Result<(DeploymentMode, ServeConfig)> {
+        let m: HashMap<String, String> = vars
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        ServeConfig::from_vars(d, |k| m.get(k).cloned())
+    }
+
+    #[test]
+    fn defaults_to_testnet() {
+        let (mode, c) = cfg(&[], MiningDefaults::issued()).unwrap();
+        assert_eq!(mode, DeploymentMode::Testnet);
+        assert!(matches!(c.mining.mode, MiningMode::Fixed { difficulty: 4 }));
+    }
+
+    #[test]
+    fn production_mining_disabled() {
+        let (mode, c) = cfg(
+            &[
+                ("WEBCASH_MODE", "production"),
+                ("WEBYCASH_MINING_MODE", "disabled"),
+            ],
+            MiningDefaults::issued(),
+        )
+        .unwrap();
+        assert_eq!(mode, DeploymentMode::Production);
+        assert!(matches!(c.mining.mode, MiningMode::Disabled));
+    }
+
+    #[test]
+    fn production_rejects_difficulty_override() {
+        assert!(cfg(
+            &[("WEBCASH_MODE", "production"), ("WEBYCASH_DIFFICULTY", "1")],
+            MiningDefaults::webcash()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn rejects_unknown_values() {
+        assert!(cfg(&[("WEBCASH_MODE", "mainnet")], MiningDefaults::webcash()).is_err());
+        assert!(cfg(
+            &[("WEBYCASH_MINING_MODE", "off")],
+            MiningDefaults::webcash()
+        )
+        .is_err());
+        assert!(cfg(&[("WEBYCASH_DIFFICULTY", "x")], MiningDefaults::webcash()).is_err());
     }
 }

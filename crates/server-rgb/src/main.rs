@@ -1,14 +1,10 @@
 //! RGB flavor binary (RGB20-fungible / splittable).
 
-use std::net::SocketAddr;
-use std::str::FromStr;
-
 use anyhow::Context;
 use tracing_subscriber::EnvFilter;
 use webycash_server::asset_rgb::RgbFungible;
 use webycash_server::auth::IssuerRegistry;
-use webycash_server::mining::{MiningConfig, MiningMode};
-use webycash_server::server_core::{serve_issued, ServeConfig, Server};
+use webycash_server::server_core::{serve_issued, MiningDefaults, ServeConfig, Server};
 use webycash_server::storage::dynamodb_backend::DynamoDbStore;
 #[cfg(feature = "fdb")]
 use webycash_server::storage::fdb_backend::FdbStore;
@@ -27,40 +23,17 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let bind = std::env::var("WEBCASH_BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
-    let mode = std::env::var("WEBCASH_MODE").unwrap_or_else(|_| "testnet".to_string());
+    let (mode, cfg) = ServeConfig::from_vars(MiningDefaults::issued(), |k| std::env::var(k).ok())?;
+    let bind = cfg.bind_addr;
     let db_backend = std::env::var("WEBCASH_DB_BACKEND").unwrap_or_else(|_| "redis".to_string());
-
-    let mut mining = MiningConfig {
-        mode: match mode.as_str() {
-            "production" => MiningMode::issued_default(),
-            _ => MiningMode::Fixed { difficulty: 4 },
-        },
-        ..MiningConfig::default()
-    };
-    if let Ok(d) = std::env::var("WEBYCASH_DIFFICULTY") {
-        if let Ok(bits) = d.parse::<u32>() {
-            mining.mode = MiningMode::Fixed { difficulty: bits };
-        }
-    }
-    if std::env::var("WEBYCASH_MINING_MODE").as_deref() == Ok("disabled") {
-        mining.mode = MiningMode::Disabled;
-    }
-
-    let bind_addr = SocketAddr::from_str(&bind)
-        .with_context(|| format!("WEBCASH_BIND_ADDR is not a valid socket address: {bind}"))?;
-    let cfg = ServeConfig { bind_addr, mining };
 
     let mut issuers = IssuerRegistry::new();
     if let Ok(raw) = std::env::var("WEBYCASH_ISSUERS") {
-        for entry in raw.split(',').filter(|s| !s.is_empty()) {
-            let (fp, pk_hex) = entry
-                .split_once(':')
-                .context("WEBYCASH_ISSUERS entries must be `fp:hex_pubkey`")?;
-            issuers
-                .add_hex(fp, pk_hex)
-                .with_context(|| format!("registering issuer {fp}"))?;
-            tracing::info!(issuer = fp, "registered (raw ed25519)");
+        for fp in issuers
+            .add_hex_list(&raw)
+            .context("parsing WEBYCASH_ISSUERS")?
+        {
+            tracing::info!(issuer = %fp, "registered (raw ed25519)");
         }
     }
     if let Ok(path) = std::env::var("WEBYCASH_ISSUER_PGP_CERTS") {
@@ -77,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(
         asset = "rgb-fungible",
         %bind,
-        %mode,
+        ?mode,
         backend = %db_backend,
         "server-rgb booting"
     );

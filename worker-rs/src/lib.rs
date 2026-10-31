@@ -25,7 +25,9 @@ use worker::wasm_bindgen::JsValue;
 use worker::*;
 
 use webycash_server::asset_core::Asset;
-use webycash_server::server_core::{ProtoRequest, ProtoResponse, ServeConfig, Server};
+use webycash_server::server_core::{
+    MiningDefaults, ProtoRequest, ProtoResponse, ServeConfig, Server,
+};
 use webycash_server::storage::{
     BurnRecord, HashRecord, KeyStrategy, LedgerStore, MiningState, Namespace, ReplaceOp,
     ReplaceResult,
@@ -58,7 +60,11 @@ struct D1Store<A: Asset, K: KeyStrategy> {
 
 impl<A: Asset, K: KeyStrategy> D1Store<A, K> {
     fn new(db: D1Database, keys: K) -> Self {
-        Self { db: SendWrapper::new(db), keys, _ph: PhantomData }
+        Self {
+            db: SendWrapper::new(db),
+            keys,
+            _ph: PhantomData,
+        }
     }
 
     /// Run a list of (sql, params) as ONE atomic D1 batch. The schema's
@@ -67,10 +73,18 @@ impl<A: Asset, K: KeyStrategy> D1Store<A, K> {
     async fn run_batch(&self, stmts: Vec<(&str, Vec<JsValue>)>) -> std::result::Result<(), String> {
         let mut prepared = Vec::with_capacity(stmts.len());
         for (sql, params) in stmts {
-            let st = self.db.prepare(sql).bind(&params).map_err(|e| e.to_string())?;
+            let st = self
+                .db
+                .prepare(sql)
+                .bind(&params)
+                .map_err(|e| e.to_string())?;
             prepared.push(st);
         }
-        self.db.batch(prepared).await.map_err(|e| e.to_string()).map(|_| ())
+        self.db
+            .batch(prepared)
+            .await
+            .map_err(|e| e.to_string())
+            .map(|_| ())
     }
 
     async fn query<T: for<'de> Deserialize<'de>>(
@@ -122,7 +136,9 @@ where
             }
             let mut stmts = Vec::with_capacity(records.len());
             for r in records {
-                let pk = self.keys.token_key(A::NAME, &r.namespace(), r.public_hash());
+                let pk = self
+                    .keys
+                    .token_key(A::NAME, &r.namespace(), r.public_hash());
                 let data = record_to_data_json(r);
                 stmts.push((INSERT_TOKEN, vec![vs(&pk), vi(r.amount_wats()), vs(&data)]));
             }
@@ -140,11 +156,16 @@ where
             if hashes.is_empty() {
                 return Ok(vec![]);
             }
-            let pks: Vec<String> =
-                hashes.iter().map(|h| self.keys.token_key(A::NAME, ns, h)).collect();
+            let pks: Vec<String> = hashes
+                .iter()
+                .map(|h| self.keys.token_key(A::NAME, ns, h))
+                .collect();
             let mut by_pk: HashMap<String, (bool, String)> = HashMap::with_capacity(pks.len());
             for chunk in pks.chunks(READ_CHUNK) {
-                let ph = (1..=chunk.len()).map(|i| format!("?{i}")).collect::<Vec<_>>().join(",");
+                let ph = (1..=chunk.len())
+                    .map(|i| format!("?{i}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
                 let sql = format!("SELECT pk, spent, data FROM tokens WHERE pk IN ({ph})");
                 let params: Vec<JsValue> = chunk.iter().map(|s| vs(s)).collect();
                 for row in self.query::<TokenRow>(&sql, params).await? {
@@ -154,7 +175,11 @@ where
             Ok(pks
                 .iter()
                 .zip(hashes.iter())
-                .map(|(pk, h)| by_pk.get(pk).and_then(|(sp, d)| data_json_to_record::<A>(h, *sp, d)))
+                .map(|(pk, h)| {
+                    by_pk
+                        .get(pk)
+                        .and_then(|(sp, d)| data_json_to_record::<A>(h, *sp, d))
+                })
                 .collect())
         })
         .await
@@ -169,11 +194,16 @@ where
             if hashes.is_empty() {
                 return Ok(vec![]);
             }
-            let pks: Vec<String> =
-                hashes.iter().map(|h| self.keys.token_key(A::NAME, ns, h)).collect();
+            let pks: Vec<String> = hashes
+                .iter()
+                .map(|h| self.keys.token_key(A::NAME, ns, h))
+                .collect();
             let mut by_pk: HashMap<String, bool> = HashMap::with_capacity(pks.len());
             for chunk in pks.chunks(READ_CHUNK) {
-                let ph = (1..=chunk.len()).map(|i| format!("?{i}")).collect::<Vec<_>>().join(",");
+                let ph = (1..=chunk.len())
+                    .map(|i| format!("?{i}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
                 let sql = format!("SELECT pk, spent FROM tokens WHERE pk IN ({ph})");
                 let params: Vec<JsValue> = chunk.iter().map(|s| vs(s)).collect();
                 for row in self.query::<CheckRow>(&sql, params).await? {
@@ -189,7 +219,11 @@ where
         .await
     }
 
-    async fn batch_replace(&self, ns: &Namespace, ops: &[ReplaceOp<A::Record>]) -> Vec<ReplaceResult> {
+    async fn batch_replace(
+        &self,
+        ns: &Namespace,
+        ops: &[ReplaceOp<A::Record>],
+    ) -> Vec<ReplaceResult> {
         SendFuture::new(async move {
             let mut out = Vec::with_capacity(ops.len());
             for op in ops {
@@ -239,8 +273,13 @@ where
     async fn get_mining_state(&self) -> anyhow::Result<Option<MiningState>> {
         SendFuture::new(async move {
             let pk = self.keys.mining_state_key(A::NAME);
-            let rows = self.query::<DataRow>(SELECT_MINING_STATE, vec![vs(&pk)]).await?;
-            Ok(rows.into_iter().next().and_then(|r| serde_json::from_str(&r.data).ok()))
+            let rows = self
+                .query::<DataRow>(SELECT_MINING_STATE, vec![vs(&pk)])
+                .await?;
+            Ok(rows
+                .into_iter()
+                .next()
+                .and_then(|r| serde_json::from_str(&r.data).ok()))
         })
         .await
     }
@@ -263,7 +302,11 @@ fn record_to_data_json<R: HashRecord>(record: &R) -> String {
     serde_json::to_string(&fields).unwrap_or_else(|_| "{}".into())
 }
 
-fn data_json_to_record<A: Asset>(public_hash: &str, spent: bool, data_json: &str) -> Option<A::Record>
+fn data_json_to_record<A: Asset>(
+    public_hash: &str,
+    spent: bool,
+    data_json: &str,
+) -> Option<A::Record>
 where
     A::Record: HashRecord,
 {
@@ -300,53 +343,85 @@ async fn fetch(mut req: Request, env: Env, _ctx: Context) -> Result<Response> {
     if let Ok(prefix) = env.var("API_PREFIX").map(|v| v.to_string()) {
         if !prefix.is_empty() {
             if let Some(rest) = proto.path.strip_prefix(&prefix) {
-                proto.path = if rest.is_empty() { "/".into() } else { rest.into() };
+                proto.path = if rest.is_empty() {
+                    "/".into()
+                } else {
+                    rest.into()
+                };
             }
         }
     }
-    let resp = SendFuture::new(run(db, proto)).await;
+    // Deployment profile from wrangler vars, via the same library rules as
+    // the native binaries. A malformed profile fails closed.
+    let cfg = match ServeConfig::from_vars(mining_defaults(), |k| {
+        env.var(k).ok().map(|v| v.to_string())
+    }) {
+        Ok((_, cfg)) => cfg,
+        Err(e) => return Response::error(format!("deployment misconfigured: {e}"), 500),
+    };
+    let resp = SendFuture::new(run(db, cfg, proto)).await;
     to_worker(resp)
 }
 
 // ── flavor dispatch (exactly one compiled per deployment) ──
 
 #[cfg(feature = "webcash")]
-async fn run(db: D1Database, proto: ProtoRequest) -> ProtoResponse {
+fn mining_defaults() -> MiningDefaults {
+    MiningDefaults::webcash()
+}
+
+#[cfg(feature = "webcash")]
+async fn run(db: D1Database, cfg: ServeConfig, proto: ProtoRequest) -> ProtoResponse {
     use webycash_server::asset_webcash::Webcash;
     use webycash_server::server_core::route_proto;
     use webycash_server::storage::WebcashLegacyKeys;
     let store = D1Store::<Webcash, WebcashLegacyKeys>::new(db, WebcashLegacyKeys);
-    let server = Server::<Webcash, _>::new(ServeConfig::testnet_default(), store);
+    let server = Server::<Webcash, _>::new(cfg, store);
     route_proto(&server, &proto).await
 }
 
 #[cfg(feature = "voucher")]
-async fn run(db: D1Database, proto: ProtoRequest) -> ProtoResponse {
+fn mining_defaults() -> MiningDefaults {
+    MiningDefaults::issued()
+}
+
+#[cfg(feature = "voucher")]
+async fn run(db: D1Database, cfg: ServeConfig, proto: ProtoRequest) -> ProtoResponse {
     use webycash_server::asset_voucher::Voucher;
     use webycash_server::server_core::route_proto_issued;
     use webycash_server::storage::NamespacedKeys;
     let store = D1Store::<Voucher, NamespacedKeys>::new(db, NamespacedKeys);
-    let server = Server::<Voucher, _>::new(ServeConfig::testnet_default(), store);
+    let server = Server::<Voucher, _>::new(cfg, store);
     route_proto_issued(&server, &proto).await
 }
 
 #[cfg(feature = "rgb")]
-async fn run(db: D1Database, proto: ProtoRequest) -> ProtoResponse {
+fn mining_defaults() -> MiningDefaults {
+    MiningDefaults::issued()
+}
+
+#[cfg(feature = "rgb")]
+async fn run(db: D1Database, cfg: ServeConfig, proto: ProtoRequest) -> ProtoResponse {
     use webycash_server::asset_rgb::RgbFungible;
     use webycash_server::server_core::route_proto_issued;
     use webycash_server::storage::NamespacedKeys;
     let store = D1Store::<RgbFungible, NamespacedKeys>::new(db, NamespacedKeys);
-    let server = Server::<RgbFungible, _>::new(ServeConfig::testnet_default(), store);
+    let server = Server::<RgbFungible, _>::new(cfg, store);
     route_proto_issued(&server, &proto).await
 }
 
 #[cfg(feature = "rgb-collectible")]
-async fn run(db: D1Database, proto: ProtoRequest) -> ProtoResponse {
+fn mining_defaults() -> MiningDefaults {
+    MiningDefaults::collectible()
+}
+
+#[cfg(feature = "rgb-collectible")]
+async fn run(db: D1Database, cfg: ServeConfig, proto: ProtoRequest) -> ProtoResponse {
     use webycash_server::asset_rgb::RgbCollectible;
     use webycash_server::server_core::route_proto_collectible;
     use webycash_server::storage::NamespacedKeys;
     let store = D1Store::<RgbCollectible, NamespacedKeys>::new(db, NamespacedKeys);
-    let server = Server::<RgbCollectible, _>::new(ServeConfig::testnet_default(), store);
+    let server = Server::<RgbCollectible, _>::new(cfg, store);
     route_proto_collectible(&server, &proto).await
 }
 
@@ -359,7 +434,12 @@ async fn to_proto(req: &mut Request) -> Result<ProtoRequest> {
         headers.insert(k.to_lowercase(), v);
     }
     let body = req.bytes().await.unwrap_or_default();
-    Ok(ProtoRequest { method, path, headers, body: bytes::Bytes::from(body) })
+    Ok(ProtoRequest {
+        method,
+        path,
+        headers,
+        body: bytes::Bytes::from(body),
+    })
 }
 
 fn to_worker(resp: ProtoResponse) -> Result<Response> {

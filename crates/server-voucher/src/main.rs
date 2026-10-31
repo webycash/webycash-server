@@ -5,15 +5,11 @@
 //! redis_fdb (feature-gated)}. Vouchers are always-splittable bearer
 //! credits, issuer-namespaced by `(contract_id, issuer_fp)`.
 
-use std::net::SocketAddr;
-use std::str::FromStr;
-
 use anyhow::Context;
 use tracing_subscriber::EnvFilter;
 use webycash_server::asset_voucher::Voucher;
 use webycash_server::auth::IssuerRegistry;
-use webycash_server::mining::{MiningConfig, MiningMode};
-use webycash_server::server_core::{serve_issued, ServeConfig, Server};
+use webycash_server::server_core::{serve_issued, MiningDefaults, ServeConfig, Server};
 use webycash_server::storage::dynamodb_backend::DynamoDbStore;
 #[cfg(feature = "fdb")]
 use webycash_server::storage::fdb_backend::FdbStore;
@@ -32,40 +28,17 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let bind = std::env::var("WEBCASH_BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
-    let mode = std::env::var("WEBCASH_MODE").unwrap_or_else(|_| "testnet".to_string());
+    let (mode, cfg) = ServeConfig::from_vars(MiningDefaults::issued(), |k| std::env::var(k).ok())?;
+    let bind = cfg.bind_addr;
     let db_backend = std::env::var("WEBCASH_DB_BACKEND").unwrap_or_else(|_| "redis".to_string());
-
-    let mut mining = MiningConfig {
-        mode: match mode.as_str() {
-            "production" => MiningMode::issued_default(),
-            _ => MiningMode::Fixed { difficulty: 4 },
-        },
-        ..MiningConfig::default()
-    };
-    if let Ok(d) = std::env::var("WEBYCASH_DIFFICULTY") {
-        if let Ok(bits) = d.parse::<u32>() {
-            mining.mode = MiningMode::Fixed { difficulty: bits };
-        }
-    }
-    if std::env::var("WEBYCASH_MINING_MODE").as_deref() == Ok("disabled") {
-        mining.mode = MiningMode::Disabled;
-    }
-
-    let bind_addr = SocketAddr::from_str(&bind)
-        .with_context(|| format!("WEBCASH_BIND_ADDR is not a valid socket address: {bind}"))?;
-    let cfg = ServeConfig { bind_addr, mining };
 
     let mut issuers = IssuerRegistry::new();
     if let Ok(raw) = std::env::var("WEBYCASH_ISSUERS") {
-        for entry in raw.split(',').filter(|s| !s.is_empty()) {
-            let (fp, pk_hex) = entry
-                .split_once(':')
-                .context("WEBYCASH_ISSUERS entries must be `fp:hex_pubkey`")?;
-            issuers
-                .add_hex(fp, pk_hex)
-                .with_context(|| format!("registering issuer {fp}"))?;
-            tracing::info!(issuer = fp, "registered (raw ed25519)");
+        for fp in issuers
+            .add_hex_list(&raw)
+            .context("parsing WEBYCASH_ISSUERS")?
+        {
+            tracing::info!(issuer = %fp, "registered (raw ed25519)");
         }
     }
     // Optional: load OpenPGP V4 armored certs from a file. One armored
@@ -85,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(
         asset = "voucher",
         %bind,
-        %mode,
+        ?mode,
         backend = %db_backend,
         "server-voucher booting"
     );
@@ -132,8 +105,7 @@ async fn main() -> anyhow::Result<()> {
                 "WORKER_PROXY_URL must be set when WEBCASH_DB_BACKEND=worker_proxy"
             })?;
             let auth_token = std::env::var("WORKER_PROXY_AUTH_TOKEN").ok();
-            let store =
-                WorkerProxyStore::<Voucher, _>::new(worker_url, auth_token, NamespacedKeys);
+            let store = WorkerProxyStore::<Voucher, _>::new(worker_url, auth_token, NamespacedKeys);
             finish!(store)
         }
         #[cfg(feature = "fdb")]

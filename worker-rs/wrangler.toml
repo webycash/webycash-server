@@ -18,6 +18,9 @@ migrations_dir = "../deploy/cloudflare-container/migrations"
 
 [vars]
 API_PREFIX = "/api/webcash"
+# Testnet ledger; keeps the historic dev difficulty (ServeConfig::from_vars).
+WEBCASH_MODE = "testnet"
+WEBYCASH_DIFFICULTY = "16"
 
 [[routes]]
 pattern = "dev.weby.cash/api/webcash/*"

@@ -113,6 +113,21 @@ impl IssuerRegistry {
             .map_err(|_| AuthError::InvalidSignature)
     }
 
+    /// Register every `fp:hex_pubkey` entry of a comma-separated list (the
+    /// `WEBYCASH_ISSUERS` format). Empty entries are skipped; any malformed
+    /// entry fails the whole list. Returns the registered fingerprints.
+    pub fn add_hex_list(&mut self, spec: &str) -> Result<Vec<String>, AuthError> {
+        let mut added = Vec::new();
+        for entry in spec.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+            let (fp, pk_hex) = entry.split_once(':').ok_or_else(|| {
+                AuthError::MalformedPubkey(format!("issuer entry `{entry}` is not `fp:hex_pubkey`"))
+            })?;
+            self.add_hex(fp, pk_hex)?;
+            added.push(fp.to_string());
+        }
+        Ok(added)
+    }
+
     /// `true` if no issuers have been registered.
     pub fn is_empty(&self) -> bool {
         self.keys.is_empty()
