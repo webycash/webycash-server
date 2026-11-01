@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --local",
-    "deploy": "wrangler deploy",
-    "deploy:prod": "wrangler deploy --env production",
+    "render": "node ../../scripts/render-wrangler.mjs",
+    "deploy": "node ../../scripts/render-wrangler.mjs --env testnet && wrangler deploy -c wrangler.generated.toml",
+    "deploy:prod": "node ../../scripts/render-wrangler.mjs --env production && wrangler deploy -c wrangler.generated.toml --env production",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test ../shared/d1-bridge.test.ts"
+    "test": "node --experimental-strip-types --test ../shared/d1-bridge.test.ts ../../scripts/render-wrangler.test.mjs"
   },
   "dependencies": {
     "@cloudflare/containers": "^0.3.7"

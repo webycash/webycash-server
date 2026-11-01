@@ -1,0 +1,45 @@
+{
+  "_comment": "Single source for Cloudflare container deploy ids (audit M12). Fill database_id after `wrangler d1 create`; account comes from CLOUDFLARE_ACCOUNT_ID. render-wrangler.mjs refuses to emit a config while any id is null or a REPLACE_ME placeholder remains.",
+  "flavors": {
+    "webcash": {
+      "testnet": {
+        "database_name": "webycash-cf-container-webcash-testnet",
+        "database_id": null
+      },
+      "production": {
+        "database_name": "webycash-cf-container-webcash-production",
+        "database_id": null
+      }
+    },
+    "rgb": {
+      "testnet": {
+        "database_name": "webycash-cf-container-rgb-testnet",
+        "database_id": null
+      },
+      "production": {
+        "database_name": "webycash-cf-container-rgb-production",
+        "database_id": null
+      }
+    },
+    "rgb-collectible": {
+      "testnet": {
+        "database_name": "webycash-cf-container-rgb-collectible-testnet",
+        "database_id": null
+      },
+      "production": {
+        "database_name": "webycash-cf-container-rgb-collectible-production",
+        "database_id": null
+      }
+    },
+    "voucher": {
+      "testnet": {
+        "database_name": "webycash-cf-container-voucher-testnet",
+        "database_id": null
+      },
+      "production": {
+        "database_name": "webycash-cf-container-voucher-production",
+        "database_id": null
+      }
+    }
+  }
+}

@@ -16,3 +16,4 @@ Cargo.lock
 deploy/cloudflare-container/workers/*/node_modules/
 deploy/cloudflare-container/workers/*/worker-configuration.d.ts
 deploy/cloudflare-container/workers/*/package-lock.json
+deploy/cloudflare-container/workers/*/wrangler.generated.toml

@@ -1,7 +1,9 @@
 name = "webycash-cf-container-rgb-collectible"
 main = "src/index.ts"
 compatibility_date = "2026-06-01"
-account_id = "REPLACE_ME"
+# account: CLOUDFLARE_ACCOUNT_ID (no id in the repo). This file is a TEMPLATE:
+# deploy via `npm run deploy` / `npm run deploy:prod`, which render
+# wrangler.generated.toml from ../../environments.json (audit M12).
 
 [[d1_databases]]
 binding = "WEBYCASH_D1"
@@ -40,5 +42,12 @@ migrations_dir = "../../migrations"
 [[env.production.containers]]
 class_name = "RgbCollectibleContainer"
 image = "../../../../Dockerfile.cf-rgb-collectible"
-instance_type = "standard"
+instance_type = "standard-1"
 max_instances = 16
+
+# durable_objects is not inherited by environments (wrangler warns; without
+# this the production Worker has no container binding).
+[env.production.durable_objects]
+bindings = [
+  { name = "WEBYCASH_CONTAINER", class_name = "RgbCollectibleContainer" },
+]

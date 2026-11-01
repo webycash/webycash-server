@@ -73,7 +73,8 @@ wrangler login
 
 wrangler d1 create webycash-cf-container-{flavor}-testnet
 wrangler d1 create webycash-cf-container-{flavor}-production
-# Paste the printed database_id values into wrangler.toml
+# Put the printed database_id values into ../../environments.json
+# (the one manifest; wrangler.toml is a template and holds no ids)
 
 wrangler d1 migrations apply webycash-cf-container-{flavor}-testnet --remote
 wrangler d1 migrations apply webycash-cf-container-{flavor}-production --remote
@@ -104,12 +105,21 @@ cd deploy/cloudflare-container/workers/{flavor}
 # once per environment: the Container <-> Worker D1 bridge token
 openssl rand -hex 32 | wrangler secret put WORKER_PROXY_AUTH_TOKEN
 
+export CLOUDFLARE_ACCOUNT_ID=...   # never committed
+
 # testnet
-wrangler deploy
+npm run deploy
 
 # production
-wrangler deploy --env production
+npm run deploy:prod
 ```
+
+`npm run deploy[:prod]` renders `wrangler.generated.toml` from
+`wrangler.toml` + `../../environments.json` and refuses (non-zero exit)
+while a D1 id is missing, a `REPLACE_ME` placeholder remains, an
+`account_id` is in the repo, or `env.production` lacks its
+`durable_objects` binding. Do not run bare `wrangler deploy` on the
+template.
 
 `wrangler deploy` builds the Container image from the corresponding
 `Dockerfile.cf-{flavor}` at the repo root and pushes both the image
