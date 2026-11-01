@@ -608,6 +608,23 @@ fn ok_text_html_json(body: String) -> ProtoResponse {
     }
 }
 
+/// 400 for a request body that is not the endpoint's JSON shape (pentest
+/// 2026-11-01 L7: these were 500 HTML, which reads as a server fault and
+/// hides client bugs). The parser detail is logged, never served.
+fn bad_json(e: &serde_json::Error) -> ProtoResponse {
+    tracing::info!(error = %e, "400 malformed JSON body");
+    ProtoResponse {
+        status: StatusCode::BAD_REQUEST.as_u16(),
+        headers: vec![
+            ("content-type", "application/json"),
+            ("access-control-allow-origin", "*"),
+            ("access-control-allow-headers", "x-requested-with"),
+            ("access-control-allow-methods", "POST, GET, OPTIONS"),
+        ],
+        body: Bytes::from_static(br#"{"error": "malformed JSON body"}"#),
+    }
+}
+
 fn server_error(msg: &str) -> ProtoResponse {
     tracing::warn!(error = msg, "500");
     ProtoResponse {
@@ -713,7 +730,7 @@ mod handlers {
     {
         let tokens: Vec<String> = match serde_json::from_slice(&req.body) {
             Ok(v) => v,
-            Err(e) => return server_error(&format!("parse: {e}")),
+            Err(e) => return bad_json(&e),
         };
 
         // Parse each token to its public form, normalize, extract hash.
@@ -867,7 +884,7 @@ mod handlers {
         let body = req.body.clone();
         let parsed: ReplaceBody = match serde_json::from_slice(&body) {
             Ok(v) => v,
-            Err(e) => return server_error(&format!("parse: {e}")),
+            Err(e) => return bad_json(&e),
         };
 
         if !parsed.legalese.as_ref().is_some_and(|l| l.terms) {
@@ -1047,7 +1064,7 @@ mod handlers {
 
         let report: MiningReportBody = match serde_json::from_slice(&req.body) {
             Ok(v) => v,
-            Err(e) => return server_error(&format!("parse: {e}")),
+            Err(e) => return bad_json(&e),
         };
         if !report.legalese.as_ref().is_some_and(|l| l.terms) {
             return server_error("legalese.terms must be true");
@@ -1071,7 +1088,7 @@ mod handlers {
         };
         let preimage: MiningPreimage = match serde_json::from_str(&preimage_json) {
             Ok(p) => p,
-            Err(e) => return server_error(&format!("invalid preimage: {e}")),
+            Err(e) => return bad_json(&e),
         };
 
         // Parse all webcash + subsidy outputs as MINED records.
@@ -1168,7 +1185,7 @@ mod handlers {
         }
         let parsed: IssueBody = match serde_json::from_slice(&body) {
             Ok(v) => v,
-            Err(e) => return server_error(&format!("parse: {e}")),
+            Err(e) => return bad_json(&e),
         };
         if !parsed.legalese.as_ref().is_some_and(|l| l.terms) {
             return server_error("legalese.terms must be true");
@@ -1237,7 +1254,7 @@ mod handlers {
     {
         let tokens: Vec<String> = match serde_json::from_slice(&req.body) {
             Ok(v) => v,
-            Err(e) => return server_error(&format!("parse: {e}")),
+            Err(e) => return bad_json(&e),
         };
 
         let mut hashes: Vec<String> = Vec::with_capacity(tokens.len());
@@ -1344,7 +1361,7 @@ mod handlers {
         let body = req.body.clone();
         let parsed: ReplaceBody = match serde_json::from_slice(&body) {
             Ok(v) => v,
-            Err(e) => return server_error(&format!("parse: {e}")),
+            Err(e) => return bad_json(&e),
         };
         if !parsed.legalese.as_ref().is_some_and(|l| l.terms) {
             return server_error("legalese.terms must be true");
@@ -1461,7 +1478,7 @@ mod handlers {
         }
         let parsed: BurnBody = match serde_json::from_slice(&req.body) {
             Ok(v) => v,
-            Err(e) => return server_error(&format!("parse: {e}")),
+            Err(e) => return bad_json(&e),
         };
         if !parsed.legalese.as_ref().is_some_and(|l| l.terms) {
             return server_error("legalese.terms must be true");
@@ -1522,7 +1539,7 @@ mod handlers {
         }
         let parsed: IssueBody = match serde_json::from_slice(&body) {
             Ok(v) => v,
-            Err(e) => return server_error(&format!("parse: {e}")),
+            Err(e) => return bad_json(&e),
         };
         if !parsed.legalese.as_ref().is_some_and(|l| l.terms) {
             return server_error("legalese.terms must be true");
@@ -1575,7 +1592,7 @@ mod handlers {
         }
         let parsed: BurnBody = match serde_json::from_slice(&req.body) {
             Ok(v) => v,
-            Err(e) => return server_error(&format!("parse: {e}")),
+            Err(e) => return bad_json(&e),
         };
         if !parsed.legalese.as_ref().is_some_and(|l| l.terms) {
             return server_error("legalese.terms must be true");
@@ -1702,6 +1719,29 @@ mod tests {
             ),
             "e1.5:public:0000000000000000000000000000000000000000000000000000000000000000"
         );
+    }
+}
+
+#[cfg(test)]
+mod bad_json_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_json_is_400_json_without_parser_detail() {
+        let e = serde_json::from_slice::<Vec<String>>(b"{not json").unwrap_err();
+        let r = bad_json(&e);
+        assert_eq!(r.status, 400);
+        assert!(r.headers.contains(&("content-type", "application/json")));
+        let v: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+        assert_eq!(v, serde_json::json!({"error": "malformed JSON body"}));
+        assert!(!String::from_utf8_lossy(&r.body).contains("line"));
+    }
+
+    #[test]
+    fn no_handler_maps_a_parse_error_to_500() {
+        let src = include_str!("lib.rs");
+        let needle = ["server_error(&format!(\"parse:", " {e}"].concat();
+        assert!(!src.contains(&needle), "parse errors must use bad_json");
     }
 }
 

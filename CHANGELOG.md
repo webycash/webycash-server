@@ -4,6 +4,15 @@ All notable changes to `webycash-server` are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Changed
+- A request body that is not valid JSON (or a mining-report preimage that
+  is not) now gets `400 {"error": "malformed JSON body"}` instead of the
+  webcash.org-style 500 HTML (pentest 2026-11-01 L7). This deliberately
+  diverges from webcash.org, which answers 500. The parser detail is only
+  logged.
+
 ## [0.3.0] — 2026-05-02
 
 The `refactor/asset-traits` branch landed. Five binaries from one
