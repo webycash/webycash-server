@@ -624,6 +624,33 @@ fn server_error(msg: &str) -> ProtoResponse {
     }
 }
 
+/// SHA-256 output width: a target no digest can meet.
+const UNMEETABLE_TARGET_BITS: u32 = 256;
+
+/// `GET /api/v1/target` body for the configured mining state (pentest
+/// 2026-11-01 L6). With mining disabled it used to advertise difficulty 1
+/// and the full reward, inviting reports that are then refused. Now it
+/// says `mining_enabled: false`, an unmeetable target (256 bits) and zero
+/// amounts, keeping the webcash.org field set (and 200, for health probes).
+fn target_body(cfg: &crate::mining::MiningConfig) -> String {
+    let enabled = cfg.current_difficulty();
+    let difficulty = enabled.unwrap_or(UNMEETABLE_TARGET_BITS);
+    let (mining_wats, subsidy_wats) = match enabled {
+        Some(_) => (cfg.mining_amount_wats, cfg.subsidy_amount_wats),
+        None => (0, 0),
+    };
+    let mining = wats_to_string(mining_wats);
+    let subsidy = wats_to_string(subsidy_wats);
+    let total = (mining_wats + subsidy_wats).max(1);
+    let ratio = mining_wats as f64 / total as f64;
+    let mining_enabled = enabled.is_some();
+    format!(
+        "{{\"difficulty_target_bits\": {difficulty}, \"ratio\": {ratio}, \
+         \"mining_amount\": \"{mining}\", \"mining_subsidy_amount\": \"{subsidy}\", \
+         \"epoch\": 0, \"mining_enabled\": {mining_enabled}}}"
+    )
+}
+
 /// Body envelope shared by replace + burn + mining_report.
 /// `legalese.terms` must be `true` for any state-mutating endpoint.
 #[derive(serde::Deserialize)]
@@ -639,18 +666,7 @@ mod handlers {
     pub async fn target<A: Asset + MintableAsset, S: LedgerStore<A>>(
         state: &Server<A, S>,
     ) -> ProtoResponse {
-        let cfg = &state.config.mining;
-        let difficulty = cfg.current_difficulty().unwrap_or(1);
-        let mining = wats_to_string(cfg.mining_amount_wats);
-        let subsidy = wats_to_string(cfg.subsidy_amount_wats);
-        let total = (cfg.mining_amount_wats + cfg.subsidy_amount_wats).max(1);
-        let ratio = cfg.mining_amount_wats as f64 / total as f64;
-        let body = format!(
-            "{{\"difficulty_target_bits\": {difficulty}, \"ratio\": {ratio}, \
-             \"mining_amount\": \"{mining}\", \"mining_subsidy_amount\": \"{subsidy}\", \
-             \"epoch\": 0}}"
-        );
-        ok_text_html_json(body)
+        ok_text_html_json(target_body(&state.config.mining))
     }
 
     /// `GET /api/v1/stats`
@@ -1702,6 +1718,41 @@ mod tests {
             ),
             "e1.5:public:0000000000000000000000000000000000000000000000000000000000000000"
         );
+    }
+}
+
+#[cfg(test)]
+mod target_tests {
+    use super::*;
+    use crate::mining::{MiningConfig, MiningMode};
+
+    fn body(mode: MiningMode) -> serde_json::Value {
+        let cfg = MiningConfig {
+            mode,
+            ..MiningConfig::default()
+        };
+        serde_json::from_str(&target_body(&cfg)).unwrap()
+    }
+
+    #[test]
+    fn disabled_mining_is_advertised_as_disabled() {
+        let v = body(MiningMode::Disabled);
+        assert_eq!(v["mining_enabled"], false);
+        assert_eq!(v["difficulty_target_bits"], 256);
+        assert_eq!(v["mining_amount"], "0");
+        assert_eq!(v["mining_subsidy_amount"], "0");
+        assert_eq!(v["ratio"], 0.0);
+    }
+
+    #[test]
+    fn enabled_mining_reports_its_difficulty() {
+        let v = body(MiningMode::Fixed { difficulty: 4 });
+        assert_eq!(v["mining_enabled"], true);
+        assert_eq!(v["difficulty_target_bits"], 4);
+        assert_ne!(v["mining_amount"], "0");
+        for k in ["ratio", "mining_amount", "mining_subsidy_amount", "epoch"] {
+            assert!(v.get(k).is_some(), "webcash.org field {k}");
+        }
     }
 }
 
