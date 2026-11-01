@@ -12,6 +12,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   webcash.org-style 500 HTML (pentest 2026-11-01 L7). This deliberately
   diverges from webcash.org, which answers 500. The parser detail is only
   logged.
+- `GET /api/v1/target` now reports the real mining state (pentest
+  2026-11-01 L6). It adds `"mining_enabled"`. With mining disabled it
+  reports an unmeetable 256-bit target and zero amounts, where it used to
+  report difficulty 1 and the full reward. The status stays 200 and the
+  webcash.org fields are kept.
 
 ## [0.3.0] — 2026-05-02
 
